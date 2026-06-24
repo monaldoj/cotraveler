@@ -120,7 +120,15 @@ function HexCategories({ state }) {
   )
 }
 
-export default function Map({ bins, checkins, selected, searchRadiusKm, onViewportChange }) {
+// Co-traveler overlay palette — orange, distinct from the user-of-
+// interest's pink. Hits (proximate to an anchor) are solid; the rest
+// of the co-traveler's track is dimmed and hollow.
+const CT_COLOR = '#ff7f0e'
+
+export default function Map({
+  bins, checkins, selected, searchRadiusKm, onViewportChange,
+  coTravelerCheckins = [], coTravelerId = null,
+}) {
   const maxCount = useMemo(
     () => bins.reduce((m, b) => Math.max(m, b.count), 0),
     [bins],
@@ -221,6 +229,28 @@ export default function Map({ bins, checkins, selected, searchRadiusKm, onViewpo
           </CircleMarker>
         )
       })}
+
+      {/* Expanded co-traveler's check-ins (orange). "Hits" — the ones
+          proximate to a search anchor — are solid; the rest of their
+          track is dimmed and hollow so the overlap reads at a glance. */}
+      {coTravelerCheckins.map((c) => (
+        <CircleMarker
+          key={`ct-${c.idx}`}
+          center={[c.lat, c.lon]}
+          radius={c.isHit ? 7 : 4}
+          pathOptions={
+            c.isHit
+              ? { color: '#fff', weight: 2, fillColor: CT_COLOR, fillOpacity: 1 }
+              : { color: CT_COLOR, weight: 1, fillColor: CT_COLOR, fillOpacity: 0.25 }
+          }
+        >
+          <Popup>
+            <strong>{coTravelerId} · {c.venue || 'unknown venue'}</strong>
+            <br />{c.time}
+            <br />{c.country || '—'} · {c.isHit ? 'hit' : 'other check-in'}
+          </Popup>
+        </CircleMarker>
+      ))}
     </MapContainer>
   )
 }

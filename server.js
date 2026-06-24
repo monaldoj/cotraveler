@@ -12,6 +12,7 @@ import {
   userCheckinsQuery,
   coTravelersAggQuery,
   coTravelerOverlapQuery,
+  coTravelerCheckinsQuery,
 } from './queries.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -319,6 +320,45 @@ app.post('/api/co-traveler-overlap', async (req, res) => {
     })
   } catch (err) {
     console.error('co-traveler-overlap error:', err.message)
+    res.status(500).json({ error: err.message })
+  }
+})
+
+// J. A co-traveler's own check-ins for the map overlay — all of them,
+// with an is_hit flag marking the ones proximate to the user-of-
+// interest's anchors. Loaded on row expand alongside the overlap list.
+app.post('/api/co-traveler-checkins', async (req, res) => {
+  const { userId, matchUserId, radiusKm = 1.0, windowHours = 24, idxList = null } = req.body || {}
+  if (!userId || !matchUserId) {
+    return res.status(400).json({ error: 'userId and matchUserId required' })
+  }
+  const token = await getToken()
+  if (!token) return res.status(503).json({ error: 'no Databricks credentials' })
+
+  const ids = Array.isArray(idxList)
+    ? idxList.map((n) => parseInt(n, 10)).filter(Number.isFinite)
+    : null
+
+  try {
+    const rows = await executeSql(
+      coTravelerCheckinsQuery({ userId, matchUserId, radiusKm, windowHours, idxList: ids }),
+      token,
+    )
+    res.json({
+      matchUserId,
+      checkins: rows.map((r) => ({
+        idx: Number(r.idx),
+        time: r.local_time,
+        venue: r.venue_category_name,
+        country: r.country_code,
+        lat: Number(r.latitude),
+        lon: Number(r.longitude),
+        h3: r.h3,
+        isHit: r.is_hit === true || r.is_hit === 'true',
+      })),
+    })
+  } catch (err) {
+    console.error('co-traveler-checkins error:', err.message)
     res.status(500).json({ error: err.message })
   }
 })

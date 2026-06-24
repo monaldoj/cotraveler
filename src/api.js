@@ -49,4 +49,9 @@ export const api = {
   // I. Per-match overlap detail — loaded when a match row expands.
   coTravelerOverlap: ({ userId, matchUserId, radiusKm, windowHours, idxList }) =>
     post('/api/co-traveler-overlap', { userId, matchUserId, radiusKm, windowHours, idxList }),
+
+  // J. A matched co-traveler's own check-ins (all of them, with an
+  // isHit flag) — overlaid on the map when a match row expands.
+  coTravelerCheckins: ({ userId, matchUserId, radiusKm, windowHours, idxList }) =>
+    post('/api/co-traveler-checkins', { userId, matchUserId, radiusKm, windowHours, idxList }),
 }

@@ -40,9 +40,25 @@ export default function App() {
   const [matches, setMatches] = useState(null)   // null = not yet searched
   const [searching, setSearching] = useState(false)
 
+  // The co-traveler currently expanded on the map: their user_id and
+  // full set of check-ins (each flagged isHit when proximate to an
+  // anchor). Only one co-traveler is overlaid at a time.
+  const [activeMatch, setActiveMatch] = useState(null)         // matchUserId | null
+  const [coTravelerCheckins, setCoTravelerCheckins] = useState([])
+  // Latest expanded match, so an out-of-order fetch can't overlay a
+  // co-traveler the analyst has already collapsed or switched away from.
+  const activeMatchRef = useRef(null)
+
   // Latest map viewport — shared by the H3 bins and the top-users
   // leaderboard so both reflect the same bounding box.
   const [viewport, setViewport] = useState(null)
+
+  // Full-population H3 hexbin layer. Toggled off so the map isn't
+  // overwhelmed while inspecting a specific user + co-traveler. Mirrored
+  // into a ref so the stable onViewportChange callback reads the latest
+  // value without being re-created on each toggle.
+  const [showHexbins, setShowHexbins] = useState(true)
+  const showHexbinsRef = useRef(true)
 
   // Track the latest viewport request so out-of-order responses from
   // rapid panning don't clobber the current view.
@@ -53,24 +69,44 @@ export default function App() {
     api.config().then(setConfig).catch(() => {})
   }, [])
 
+  // Fetch + apply the H3 bins for a viewport, guarded against
+  // out-of-order responses. No-op (and clears the layer) when hexbins
+  // are toggled off.
+  const fetchBins = useCallback(async (vp) => {
+    if (!showHexbinsRef.current) { setBins([]); setLoadingBins(false); return }
+    const seq = ++reqSeq.current
+    setLoadingBins(true)
+    try {
+      const { bins } = await api.h3Bins(vp)
+      if (seq === reqSeq.current) setBins(bins)
+    } catch (err) {
+      if (seq === reqSeq.current) setError(err.message)
+    } finally {
+      if (seq === reqSeq.current) setLoadingBins(false)
+    }
+  }, [])
+
+  // Toggle the hexbin layer. Turning it off drops the layer immediately;
+  // turning it back on re-queries the current viewport.
+  function onToggleHexbins() {
+    setShowHexbins((on) => {
+      const next = !on
+      showHexbinsRef.current = next
+      if (!next) { setBins([]); reqSeq.current++ }   // cancel any in-flight result
+      else if (viewport) fetchBins(viewport)
+      return next
+    })
+  }
+
   // Flow 1 — viewport change -> debounced H3 bin query. Also publish
   // the (debounced) viewport so the leaderboard can re-rank in step.
   const onViewportChange = useCallback((vp) => {
     clearTimeout(binDebounce.current)
-    binDebounce.current = setTimeout(async () => {
+    binDebounce.current = setTimeout(() => {
       setViewport(vp)
-      const seq = ++reqSeq.current
-      setLoadingBins(true)
-      try {
-        const { bins } = await api.h3Bins(vp)
-        if (seq === reqSeq.current) setBins(bins)
-      } catch (err) {
-        if (seq === reqSeq.current) setError(err.message)
-      } finally {
-        if (seq === reqSeq.current) setLoadingBins(false)
-      }
+      fetchBins(vp)
     }, 350)
-  }, [])
+  }, [fetchBins])
 
   // Flow 2 — search a user-of-interest and load all their check-ins.
   async function onSearchUser(userId) {
@@ -80,6 +116,7 @@ export default function App() {
     setLoadingCheckins(true)
     setUserOfInterest(id)
     setMatches(null)          // clear any prior co-traveler results
+    clearActiveMatch()        // drop any co-traveler overlay
     setSelected(null)         // default: all check-ins selected
     try {
       const { checkins } = await api.userCheckins(id)
@@ -105,7 +142,15 @@ export default function App() {
     setCheckins([])
     setSelected(null)
     setMatches(null)
+    clearActiveMatch()
     setError(null)
+  }
+
+  // Drop the co-traveler overlay (collapsed row, cleared user, etc.).
+  function clearActiveMatch() {
+    activeMatchRef.current = null
+    setActiveMatch(null)
+    setCoTravelerCheckins([])
   }
 
   // Toggle one check-in's selection. We materialize "all" into a real
@@ -135,6 +180,7 @@ export default function App() {
     }
     setError(null)
     setSearching(true)
+    clearActiveMatch()        // a fresh search invalidates any overlay
     try {
       const { matches } = await api.coTravelers({
         userId: userOfInterest, radiusKm, windowHours, idxList,
@@ -153,6 +199,27 @@ export default function App() {
     return api.coTravelerOverlap({
       userId: userOfInterest, matchUserId, radiusKm, windowHours, idxList,
     })
+  }
+
+  // A match row expanded/collapsed. On expand, fetch that co-traveler's
+  // full check-ins and overlay them on the map (hits highlighted); on
+  // collapse, or when a different row opens, drop the previous overlay.
+  function onToggleMatch(matchUserId, isOpen) {
+    if (!isOpen) {
+      if (activeMatchRef.current === matchUserId) clearActiveMatch()
+      return
+    }
+    activeMatchRef.current = matchUserId
+    setActiveMatch(matchUserId)
+    setCoTravelerCheckins([])
+    const idxList = selected === null ? null : Array.from(selected)
+    api
+      .coTravelerCheckins({ userId: userOfInterest, matchUserId, radiusKm, windowHours, idxList })
+      .then(({ checkins }) => {
+        // Ignore a response for a row that's since been collapsed/swapped.
+        if (activeMatchRef.current === matchUserId) setCoTravelerCheckins(checkins)
+      })
+      .catch(() => {})
   }
 
   return (
@@ -177,6 +244,10 @@ export default function App() {
         onSelectNone={onSelectNone}
         onFindCoTravelers={onFindCoTravelers}
         fetchOverlap={fetchOverlap}
+        onToggleMatch={onToggleMatch}
+        activeMatch={activeMatch}
+        showHexbins={showHexbins}
+        onToggleHexbins={onToggleHexbins}
       />
       <main className="map-wrap">
         <Map
@@ -185,9 +256,13 @@ export default function App() {
           selected={selected}
           searchRadiusKm={radiusKm}
           onViewportChange={onViewportChange}
+          coTravelerCheckins={coTravelerCheckins}
+          coTravelerId={activeMatch}
         />
         <div className="status">
-          {loadingBins ? 'Querying H3 bins…' : `${bins.length} hexbins in view`}
+          {!showHexbins
+            ? 'Hexbins hidden'
+            : loadingBins ? 'Querying H3 bins…' : `${bins.length} hexbins in view`}
           {config && (
             <span className="conn">
               {config.connected ? ' · live' : ' · no warehouse'} · {config.table}

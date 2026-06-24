@@ -116,13 +116,15 @@ function CheckinList({
 // MatchRow — one co-traveler match. Expands to lazily load the overlap
 // detail (which of the user-of-interest's check-ins they came near).
 // ------------------------------------------------------------
-function MatchRow({ match, fetchOverlap }) {
+function MatchRow({ match, fetchOverlap, onToggleMatch, active }) {
   const [open, setOpen] = useState(false)
   const [detail, setDetail] = useState(null)   // null | {loading} | {overlaps} | {error}
 
   function toggle() {
     const next = !open
     setOpen(next)
+    // Tell the app to overlay (or drop) this co-traveler's check-ins.
+    onToggleMatch(match.userId, next)
     if (next && !detail) {
       setDetail({ loading: true })
       fetchOverlap(match.userId)
@@ -133,7 +135,7 @@ function MatchRow({ match, fetchOverlap }) {
 
   return (
     <li>
-      <div className="user-row" onClick={toggle}>
+      <div className={`user-row ${active ? 'ct-active' : ''}`} onClick={toggle}>
         <span className={`caret ${open ? 'open' : ''}`}>▶</span>
         <span className="user-id">{match.userId}</span>
         <span className="user-count">{match.hits.toLocaleString()} hits · {match.stops} stops</span>
@@ -171,7 +173,8 @@ export default function SearchPanel({
   radiusKm, setRadiusKm, windowHours, setWindowHours, viewport,
   userOfInterest, checkins, loadingCheckins, selected, matches, searching, error,
   onSearchUser, onClearUser, onToggleCheckin, onSelectAll, onSelectNone,
-  onFindCoTravelers, fetchOverlap,
+  onFindCoTravelers, fetchOverlap, onToggleMatch, activeMatch,
+  showHexbins, onToggleHexbins,
 }) {
   const [userId, setUserId] = useState('')
   const [suggestions, setSuggestions] = useState([])
@@ -215,6 +218,7 @@ export default function SearchPanel({
 
   return (
     <aside className="sidebar">
+      <div className="sidebar-content">
       <h1>Co-Traveler</h1>
       <p className="subtitle">H3 spatiotemporal proximity on Databricks SQL</p>
 
@@ -309,7 +313,13 @@ export default function SearchPanel({
                 ) : (
                   <ul className="leaderboard">
                     {matches.map((m) => (
-                      <MatchRow key={m.userId} match={m} fetchOverlap={fetchOverlap} />
+                      <MatchRow
+                        key={m.userId}
+                        match={m}
+                        fetchOverlap={fetchOverlap}
+                        onToggleMatch={onToggleMatch}
+                        active={activeMatch === m.userId}
+                      />
                     ))}
                   </ul>
                 )
@@ -318,6 +328,20 @@ export default function SearchPanel({
           )}
         </>
       )}
+      </div>
+
+      {/* Pinned footer — toggle the full-population H3 hexbin layer so
+          the map stays uncluttered while investigating a user. */}
+      <div className="sidebar-footer">
+        <label className="hexbin-toggle">
+          <input
+            type="checkbox"
+            checked={showHexbins}
+            onChange={onToggleHexbins}
+          />
+          <span>Show population hexbins</span>
+        </label>
+      </div>
     </aside>
   )
 }

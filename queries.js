@@ -572,3 +572,106 @@ export function coTravelerOverlapQuery({
     ],
   }
 }
+
+// ============================================================
+// J. A co-traveler's own check-ins (map overlay)
+//
+// When an analyst expands a matched co-traveler we plot ALL of that
+// co-traveler's check-ins on the map, flagging the subset that are
+// "hits" — the ones that fell within the search radius + time window
+// of one of the user-of-interest's anchors. Anchor selection mirrors
+// coTravelersAggQuery / coTravelerOverlapQuery so the highlighted hits
+// reflect exactly the search the expanded row came from.
+//
+// The hits set is computed over the co-traveler's FULL check-in history
+// (the `ct` CTE is unfiltered), then the final SELECT orders hits first
+// so they always survive the display `limit`, even for very active
+// users whose non-hit check-ins would otherwise push them past the cap.
+// ============================================================
+export function coTravelerCheckinsQuery({
+  userId,
+  matchUserId,
+  radiusKm,
+  windowHours,
+  idxList = null,
+  maxAnchors = 2000,
+  limit = 500,
+}) {
+  const k = Math.max(1, Math.ceil(radiusKm / H3_R9_EDGE_KM) + 1)
+
+  const anchorFilter =
+    idxList && idxList.length
+      ? `WHERE idx IN (${idxList.map((n) => parseInt(n, 10)).filter(Number.isFinite).join(',')})`
+      : `ORDER BY idx LIMIT ${parseInt(maxAnchors, 10)}`
+
+  const statement = `
+    WITH anchor_numbered AS (
+      SELECT
+        latitude, longitude, local_time, h3_r9,
+        ROW_NUMBER() OVER (ORDER BY ${CHECKIN_ORDER}) AS idx
+      FROM ${CHECKINS_TABLE}
+      WHERE user_id = :userId
+    ),
+    anchors AS (
+      SELECT
+        latitude  AS a_lat,
+        longitude AS a_lon,
+        local_time AS a_time,
+        h3_r9      AS anchor_cell
+      FROM anchor_numbered
+      ${anchorFilter}
+    ),
+    ring AS (
+      SELECT a.*, explode(h3_kring(a.anchor_cell, :k)) AS cell
+      FROM anchors a
+    ),
+    ct AS (
+      SELECT
+        latitude, longitude, local_time, h3_r9,
+        venue_category_name, country_code,
+        ROW_NUMBER() OVER (ORDER BY ${CHECKIN_ORDER}) AS idx
+      FROM ${CHECKINS_TABLE}
+      WHERE user_id = :matchUserId
+    ),
+    -- The co-traveler's check-ins that fall within an anchor's radius
+    -- AND time window — these are the proximate "hits".
+    hits AS (
+      SELECT ct.idx AS hit_idx
+      FROM ring a
+      JOIN ct ON ct.h3_r9 = a.cell
+      WHERE ct.local_time BETWEEN a.a_time - MAKE_INTERVAL(0,0,0,0,:win,0,0)
+                              AND a.a_time + MAKE_INTERVAL(0,0,0,0,:win,0,0)
+        AND 2 * 6371 * ASIN(SQRT(
+              POWER(SIN(RADIANS(ct.latitude - a.a_lat) / 2), 2) +
+              COS(RADIANS(a.a_lat)) * COS(RADIANS(ct.latitude)) *
+              POWER(SIN(RADIANS(ct.longitude - a.a_lon) / 2), 2)
+            )) <= :radiusKm
+      GROUP BY ct.idx
+    )
+    SELECT
+      ct.idx,
+      ct.local_time,
+      ct.venue_category_name,
+      ct.country_code,
+      ct.latitude,
+      ct.longitude,
+      h3_h3tostring(ct.h3_r9) AS h3,
+      (h.hit_idx IS NOT NULL) AS is_hit
+    FROM ct
+    LEFT JOIN hits h ON h.hit_idx = ct.idx
+    ORDER BY is_hit DESC, ct.idx
+    LIMIT :limit
+  `
+
+  return {
+    statement,
+    parameters: [
+      param('userId', userId),
+      param('matchUserId', matchUserId),
+      param('k', k, 'INT'),
+      param('win', windowHours, 'INT'),
+      param('radiusKm', radiusKm, 'DOUBLE'),
+      param('limit', limit, 'INT'),
+    ],
+  }
+}
