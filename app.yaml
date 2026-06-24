@@ -1,0 +1,17 @@
+command:
+  - node
+  - server.js
+
+env:
+  # Warehouse that runs the H3 spatial SQL. Override per-workspace if needed.
+  - name: WAREHOUSE_ID
+    value: c6881915e0a8c7c6
+  # Fully-qualified Unity Catalog table backing the map.
+  - name: CHECKINS_TABLE
+    value: justinm_demo.cotraveler.checkins_h3
+
+resources:
+  - name: sql-warehouse
+    sql_warehouse:
+      id: c6881915e0a8c7c6
+      permission: CAN_USE
