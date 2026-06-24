@@ -7,11 +7,11 @@ import {
   CHECKINS_TABLE,
   viewportBinsQuery,
   hexCategoriesQuery,
-  userCheckpointQuery,
-  proximitySearchQuery,
   userSuggestQuery,
   topUsersQuery,
   userCheckinsQuery,
+  coTravelersAggQuery,
+  coTravelerOverlapQuery,
 } from './queries.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -217,11 +217,12 @@ app.get('/api/top-users', async (req, res) => {
   }
 })
 
-// G. Individual check-ins for one user — loaded on row expand.
+// G. Individual check-ins for the user-of-interest — the searched
+// user's full activity list (with a stable idx the checkboxes use).
 app.get('/api/user-checkins', async (req, res) => {
   const userId = (req.query.userId || '').toString()
   if (!userId) return res.status(400).json({ error: 'userId required' })
-  const limit = Math.min(Number(req.query.limit) || 200, 1000)
+  const limit = Math.min(Number(req.query.limit) || 500, 2000)
   const token = await getToken()
   if (!token) return res.status(503).json({ error: 'no Databricks credentials' })
 
@@ -230,11 +231,13 @@ app.get('/api/user-checkins', async (req, res) => {
     res.json({
       userId,
       checkins: rows.map((r) => ({
+        idx: Number(r.idx),
         time: r.local_time,
         venue: r.venue_category_name,
         country: r.country_code,
         lat: Number(r.latitude),
         lon: Number(r.longitude),
+        h3: r.h3,
       })),
     })
   } catch (err) {
@@ -243,52 +246,73 @@ app.get('/api/user-checkins', async (req, res) => {
   }
 })
 
-// B + C. Spatiotemporal proximity search.
-// Returns the anchor checkpoint and the proximal co-traveler records.
-app.post('/api/user-search', async (req, res) => {
-  const { userId, radiusKm = 1.0, windowHours = 24, atTime = null, limit = 500 } = req.body || {}
+// H. Aggregated co-traveler search. Anchors on many (or a checkbox
+// subset) of the user-of-interest's check-ins and returns other users
+// ranked by how often they were proximate.
+app.post('/api/co-travelers', async (req, res) => {
+  const { userId, radiusKm = 1.0, windowHours = 24, idxList = null, limit = 200 } = req.body || {}
   if (!userId) return res.status(400).json({ error: 'userId required' })
   const token = await getToken()
   if (!token) return res.status(503).json({ error: 'no Databricks credentials' })
 
-  try {
-    // Step 1–2: resolve the anchor checkpoint (and its H3 index).
-    const [anchor] = await executeSql(userCheckpointQuery({ userId, atTime }), token)
-    if (!anchor) return res.json({ anchor: null, matches: [] })
+  // Normalize the optional checkbox subset to a clean integer array.
+  const ids = Array.isArray(idxList)
+    ? idxList.map((n) => parseInt(n, 10)).filter(Number.isFinite)
+    : null
 
-    // Step 3: spatiotemporal kRing + radius + time-window search.
-    const matches = await executeSql(
-      proximitySearchQuery({ userId, radiusKm, windowHours, atTime, limit }),
+  try {
+    const rows = await executeSql(
+      coTravelersAggQuery({ userId, radiusKm, windowHours, idxList: ids, limit }),
       token,
     )
-
-    // Step 4: shape for the map. Distinct payload from H3 bins so the
-    // frontend can style proximal points differently.
     res.json({
-      anchor: {
-        userId: anchor.user_id,
-        lat: Number(anchor.latitude),
-        lon: Number(anchor.longitude),
-        time: anchor.local_time,
-        venue: anchor.venue_category_name,
-        country: anchor.country_code,
-        h3: anchor.anchor_h3,
-      },
-      params: { radiusKm, windowHours },
-      matches: matches.map((m) => ({
+      userId,
+      params: { radiusKm, windowHours, anchorCount: ids ? ids.length : null },
+      matches: rows.map((m) => ({
         userId: m.user_id,
-        venueId: m.venue_id,
-        venue: m.venue_category_name,
-        lat: Number(m.latitude),
-        lon: Number(m.longitude),
-        time: m.local_time,
-        h3: m.h3,
-        distKm: Number(m.dist_km),
-        minutesApart: Number(m.minutes_apart),
+        hits: Number(m.hits),
+        stops: Number(m.stops),
+        nearestKm: Number(m.nearest_km),
+        closestMin: Number(m.closest_min),
       })),
     })
   } catch (err) {
-    console.error('user-search error:', err.message)
+    console.error('co-travelers error:', err.message)
+    res.status(500).json({ error: err.message })
+  }
+})
+
+// I. Per-match overlap detail — which of the user-of-interest's
+// check-ins a given co-traveler came near. Loaded on row expand.
+app.post('/api/co-traveler-overlap', async (req, res) => {
+  const { userId, matchUserId, radiusKm = 1.0, windowHours = 24, idxList = null } = req.body || {}
+  if (!userId || !matchUserId) {
+    return res.status(400).json({ error: 'userId and matchUserId required' })
+  }
+  const token = await getToken()
+  if (!token) return res.status(503).json({ error: 'no Databricks credentials' })
+
+  const ids = Array.isArray(idxList)
+    ? idxList.map((n) => parseInt(n, 10)).filter(Number.isFinite)
+    : null
+
+  try {
+    const rows = await executeSql(
+      coTravelerOverlapQuery({ userId, matchUserId, radiusKm, windowHours, idxList: ids }),
+      token,
+    )
+    res.json({
+      overlaps: rows.map((r) => ({
+        idx: Number(r.idx),
+        time: r.anchor_time,
+        venue: r.anchor_venue,
+        nearestKm: Number(r.nearest_km),
+        closestMin: Number(r.closest_min),
+        encounters: Number(r.encounters),
+      })),
+    })
+  } catch (err) {
+    console.error('co-traveler-overlap error:', err.message)
     res.status(500).json({ error: err.message })
   }
 })

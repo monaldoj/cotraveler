@@ -8,17 +8,18 @@
 //   3. Emit the viewport bounding box (N/S/E/W) + zoom whenever the
 //      user finishes panning/zooming — this is what triggers the
 //      re-aggregation query upstream.
-//   4. Overlay the proximity-search anchor + co-traveler markers,
-//      styled distinctly from the background bins.
+//   4. Overlay the user-of-interest's check-ins (one marker each),
+//      highlighting the subset selected as co-traveler search anchors,
+//      and fly to them when a user is searched.
 // ============================================================
-import { useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   MapContainer,
   TileLayer,
   GeoJSON,
   CircleMarker,
-  Circle,
   Popup,
+  useMap,
   useMapEvents,
 } from 'react-leaflet'
 import { api } from '../api.js'
@@ -59,6 +60,37 @@ function ViewportWatcher({ onViewportChange }) {
   return null
 }
 
+// ------------------------------------------------------------
+// FlyToCheckins — when a fresh set of check-ins arrives, frame them.
+// A single check-in flies to a fixed zoom; multiple fit their bounds.
+// Keyed on the first check-in's identity so we only move when the
+// searched user actually changes, not on every selection toggle.
+// ------------------------------------------------------------
+function FlyToCheckins({ checkins }) {
+  const map = useMap()
+  const lastKey = useRef(null)
+
+  useEffect(() => {
+    if (!checkins.length) { lastKey.current = null; return }
+    const key = `${checkins[0].idx}:${checkins[0].lat},${checkins[0].lon}:${checkins.length}`
+    if (key === lastKey.current) return
+    lastKey.current = key
+
+    if (checkins.length === 1) {
+      map.flyTo([checkins[0].lat, checkins[0].lon], 14, { duration: 0.75 })
+    } else {
+      const lats = checkins.map((c) => c.lat)
+      const lons = checkins.map((c) => c.lon)
+      map.flyToBounds(
+        [[Math.min(...lats), Math.min(...lons)], [Math.max(...lats), Math.max(...lons)]],
+        { padding: [40, 40], maxZoom: 15, duration: 0.75 },
+      )
+    }
+  }, [checkins, map])
+
+  return null
+}
+
 // Renders the venue-category breakdown inside a hexagon popup. Tracks
 // three states: loading, error, and the sorted category list. When a
 // cell has multiple categories we list each with its check-in count.
@@ -88,11 +120,15 @@ function HexCategories({ state }) {
   )
 }
 
-export default function Map({ bins, anchor, matches, searchRadiusKm, onViewportChange }) {
+export default function Map({ bins, checkins, selected, searchRadiusKm, onViewportChange }) {
   const maxCount = useMemo(
     () => bins.reduce((m, b) => Math.max(m, b.count), 0),
     [bins],
   )
+
+  // A check-in is a selected anchor when selection is "all" (null) or
+  // its idx is in the explicit set.
+  const isSelected = (idx) => selected === null || selected.has(idx)
 
   // Latest map zoom — needed so the category query filters on the same
   // H3 resolution the bin layer was drawn at. Kept in a ref so reading
@@ -137,6 +173,7 @@ export default function Map({ bins, anchor, matches, searchRadiusKm, onViewportC
       />
 
       <ViewportWatcher onViewportChange={handleViewportChange} />
+      <FlyToCheckins checkins={checkins} />
 
       {/* H3 hexbin layer — one GeoJSON polygon per cell. Keyed by h3
           so React reuses layers across viewport updates. */}
@@ -160,47 +197,30 @@ export default function Map({ bins, anchor, matches, searchRadiusKm, onViewportC
         </GeoJSON>
       ))}
 
-      {/* Proximity search overlay — drawn on top of the bins. */}
-      {anchor && (
-        <>
-          {/* Search radius ring. */}
-          <Circle
-            center={[anchor.lat, anchor.lon]}
-            radius={searchRadiusKm * 1000}
-            pathOptions={{ color: '#ffffff', weight: 1, dashArray: '4', fill: false }}
-          />
-          {/* Anchor checkpoint — the searched user. */}
+      {/* User-of-interest check-ins. Selected anchors are solid pink;
+          deselected ones are dimmed and hollow so the active search
+          subset reads at a glance. */}
+      {checkins.map((c) => {
+        const sel = isSelected(c.idx)
+        return (
           <CircleMarker
-            center={[anchor.lat, anchor.lon]}
-            radius={9}
-            pathOptions={{ color: '#fff', weight: 2, fillColor: '#e7298a', fillOpacity: 1 }}
+            key={c.idx}
+            center={[c.lat, c.lon]}
+            radius={sel ? 7 : 4}
+            pathOptions={
+              sel
+                ? { color: '#fff', weight: 2, fillColor: '#e7298a', fillOpacity: 1 }
+                : { color: '#e7298a', weight: 1, fillColor: '#e7298a', fillOpacity: 0.25 }
+            }
           >
             <Popup>
-              <strong>Anchor — user {anchor.userId}</strong>
-              <br />{anchor.venue || 'unknown venue'}
-              <br />{anchor.time}
-              <br />H3 {anchor.h3}
+              <strong>#{c.idx} · {c.venue || 'unknown venue'}</strong>
+              <br />{c.time}
+              <br />{c.country || '—'} · {sel ? 'selected' : 'not selected'}
             </Popup>
           </CircleMarker>
-        </>
-      )}
-
-      {/* Co-traveler matches — distinct yellow, sized nothing fancy. */}
-      {matches.map((m, i) => (
-        <CircleMarker
-          key={`${m.userId}-${m.venueId}-${i}`}
-          center={[m.lat, m.lon]}
-          radius={5}
-          pathOptions={{ color: '#222', weight: 1, fillColor: '#ffd92f', fillOpacity: 0.9 }}
-        >
-          <Popup>
-            <strong>user {m.userId}</strong>
-            <br />{m.venue || 'unknown venue'}
-            <br />{m.time}
-            <br />{m.distKm} km · {m.minutesApart} min apart
-          </Popup>
-        </CircleMarker>
-      ))}
+        )
+      })}
     </MapContainer>
   )
 }

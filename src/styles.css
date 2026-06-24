@@ -205,6 +205,85 @@ body {
 }
 .checkin-list small { color: var(--muted); }
 
+/* ---- User-of-interest + redesigned search ---- */
+.uoi {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 20px;
+  padding: 8px 10px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 13px;
+}
+.uoi span { flex: 1; }
+
+.link {
+  width: auto;
+  padding: 0;
+  background: none;
+  border: none;
+  color: var(--muted);
+  font-size: 12px;
+  text-decoration: underline;
+  cursor: pointer;
+}
+.link:hover { color: var(--text); }
+
+/* Collapsible section headers (check-ins, co-travelers). */
+h2.collapsible {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  user-select: none;
+}
+h2.collapsible .caret {
+  font-size: 9px;
+  transition: transform 0.15s;
+}
+h2.collapsible .caret.open { transform: rotate(90deg); }
+h2 .badge {
+  margin-left: auto;
+  text-transform: none;
+  letter-spacing: 0;
+  color: var(--muted);
+  font-weight: 400;
+}
+
+.sel-actions {
+  display: flex;
+  gap: 6px;
+  margin: 8px 0;
+}
+.sel-actions button {
+  width: auto;
+  padding: 3px 10px;
+  font-size: 11px;
+  font-weight: 600;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--muted);
+}
+.sel-actions button:hover { border-color: var(--accent); color: var(--text); }
+
+.checkin-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  cursor: pointer;
+  color: var(--text);
+}
+.checkin-row input[type='checkbox'] {
+  margin-top: 3px;
+  accent-color: var(--accent);
+  flex-shrink: 0;
+}
+
+.find-btn { margin-top: 12px; }
+
 /* ---- Map ---- */
 .map-wrap {
   position: relative;

@@ -323,30 +323,242 @@ export function topUsersQuery({ limit = 100 }) {
   }
 }
 
+// ------------------------------------------------------------
+// Canonical ordering for a single user's check-ins.
+//
+// Every query that numbers a user's check-ins (the list shown in the
+// sidebar, the aggregated co-traveler search, the per-match overlap
+// detail) MUST use this exact ORDER BY. The integer ROW_NUMBER it
+// produces ("idx") is the contract: the frontend sends back a subset
+// of idx values via the checkboxes, and the search re-derives the same
+// numbering to pick which check-ins to anchor on. Change this in one
+// place and the others drift out of alignment.
+// ------------------------------------------------------------
+const CHECKIN_ORDER = 'local_time DESC, venue_id, latitude, longitude'
+
 // ============================================================
 // G. Individual check-ins for one user
 //
-// Loaded lazily when an analyst expands a user row in the leaderboard.
-// Most-recent-first so the latest activity is on top. venue_category_name
-// lives on the check-ins table directly, so no POIs join is needed.
+// Drives the "user-of-interest" list in the sidebar. The idx is a
+// stable 1-based number over ALL of the user's check-ins (the window
+// runs over the full partition), so even though we only return the
+// first `limit` rows the numbering matches the search query's anchors.
+// venue_category_name lives on the check-ins table directly, so no
+// POIs join is needed.
 // ============================================================
-export function userCheckinsQuery({ userId, limit = 200 }) {
+export function userCheckinsQuery({ userId, limit = 500 }) {
   const statement = `
     SELECT
+      ROW_NUMBER() OVER (ORDER BY ${CHECKIN_ORDER}) AS idx,
       local_time,
       venue_category_name,
       country_code,
       latitude,
-      longitude
+      longitude,
+      h3_h3tostring(h3_r9) AS h3
     FROM ${CHECKINS_TABLE}
     WHERE user_id = :userId
-    ORDER BY local_time DESC
-    LIMIT :limit
+    QUALIFY idx <= :limit
+    ORDER BY idx
   `
   return {
     statement,
     parameters: [
       param('userId', userId),
+      param('limit', limit, 'INT'),
+    ],
+  }
+}
+
+// ============================================================
+// H. Aggregated co-traveler search
+//
+// The core of the redesigned search. Instead of anchoring on a single
+// checkpoint, we anchor on MANY of the user-of-interest's check-ins at
+// once and aggregate the matches per other user_id.
+//
+//   1. Number the user's check-ins with the canonical ordering.
+//   2. Keep the anchors the analyst selected — either an explicit
+//      subset of idx values (the checkboxes) or, by default, the first
+//      `maxAnchors` of them.
+//   3. kRing-expand every anchor cell, equi-join the table on those
+//      cells inside each anchor's own time window, refine to the exact
+//      radius.
+//   4. GROUP BY the other user_id: hits = total proximate check-ins,
+//      stops = how many DISTINCT anchors of the user-of-interest they
+//      came near. Order by hits so the most-frequent co-travelers rise.
+//
+// `idxList` is an array of integers; when present we filter anchors to
+// exactly those. It is interpolated (not bound) because the SQL
+// Statement API has no array parameter type — values are integers we
+// generate, never user text, so there is no injection surface.
+// ============================================================
+export function coTravelersAggQuery({
+  userId,
+  radiusKm,
+  windowHours,
+  idxList = null,
+  maxAnchors = 2000,
+  limit = 200,
+}) {
+  const k = Math.max(1, Math.ceil(radiusKm / H3_R9_EDGE_KM) + 1)
+
+  // Anchor selection: an explicit checkbox subset, or the first N.
+  const anchorFilter =
+    idxList && idxList.length
+      ? `WHERE idx IN (${idxList.map((n) => parseInt(n, 10)).filter(Number.isFinite).join(',')})`
+      : `ORDER BY idx LIMIT ${parseInt(maxAnchors, 10)}`
+
+  const statement = `
+    WITH numbered AS (
+      SELECT
+        latitude, longitude, local_time, h3_r9,
+        ROW_NUMBER() OVER (ORDER BY ${CHECKIN_ORDER}) AS idx
+      FROM ${CHECKINS_TABLE}
+      WHERE user_id = :userId
+    ),
+    anchors AS (
+      SELECT
+        latitude  AS a_lat,
+        longitude AS a_lon,
+        local_time AS a_time,
+        h3_r9      AS anchor_cell,
+        idx        AS anchor_idx
+      FROM numbered
+      ${anchorFilter}
+    ),
+    ring AS (
+      SELECT a.*, explode(h3_kring(a.anchor_cell, :k)) AS cell
+      FROM anchors a
+    ),
+    candidates AS (
+      SELECT
+        c.user_id,
+        a.anchor_idx,
+        2 * 6371 * ASIN(SQRT(
+          POWER(SIN(RADIANS(c.latitude - a.a_lat) / 2), 2) +
+          COS(RADIANS(a.a_lat)) * COS(RADIANS(c.latitude)) *
+          POWER(SIN(RADIANS(c.longitude - a.a_lon) / 2), 2)
+        )) AS dist_km,
+        ABS(TIMESTAMPDIFF(MINUTE, c.local_time, a.a_time)) AS minutes_apart
+      FROM ring a
+      JOIN ${CHECKINS_TABLE} c
+        ON c.h3_r9 = a.cell
+      WHERE c.user_id <> :userId
+        AND c.local_time BETWEEN a.a_time - MAKE_INTERVAL(0,0,0,0,:win,0,0)
+                             AND a.a_time + MAKE_INTERVAL(0,0,0,0,:win,0,0)
+    )
+    SELECT
+      user_id,
+      COUNT(*)                   AS hits,
+      COUNT(DISTINCT anchor_idx) AS stops,
+      ROUND(MIN(dist_km), 3)     AS nearest_km,
+      MIN(minutes_apart)         AS closest_min
+    FROM candidates
+    WHERE dist_km <= :radiusKm
+    GROUP BY user_id
+    ORDER BY hits DESC, stops DESC, nearest_km
+    LIMIT :limit
+  `
+
+  return {
+    statement,
+    parameters: [
+      param('userId', userId),
+      param('k', k, 'INT'),
+      param('win', windowHours, 'INT'),
+      param('radiusKm', radiusKm, 'DOUBLE'),
+      param('limit', limit, 'INT'),
+    ],
+  }
+}
+
+// ============================================================
+// I. Per-match overlap detail
+//
+// Loaded lazily when an analyst expands one matched co-traveler. Shows
+// WHICH of the user-of-interest's check-ins that co-traveler came near
+// — the anchor's time + venue, the nearest distance, and the closest
+// time gap. Mirrors the anchor selection of coTravelersAggQuery so the
+// detail always reflects the same search the row came from.
+// ============================================================
+export function coTravelerOverlapQuery({
+  userId,
+  matchUserId,
+  radiusKm,
+  windowHours,
+  idxList = null,
+  maxAnchors = 2000,
+  limit = 100,
+}) {
+  const k = Math.max(1, Math.ceil(radiusKm / H3_R9_EDGE_KM) + 1)
+
+  const anchorFilter =
+    idxList && idxList.length
+      ? `WHERE idx IN (${idxList.map((n) => parseInt(n, 10)).filter(Number.isFinite).join(',')})`
+      : `ORDER BY idx LIMIT ${parseInt(maxAnchors, 10)}`
+
+  const statement = `
+    WITH numbered AS (
+      SELECT
+        latitude, longitude, local_time, h3_r9, venue_category_name,
+        ROW_NUMBER() OVER (ORDER BY ${CHECKIN_ORDER}) AS idx
+      FROM ${CHECKINS_TABLE}
+      WHERE user_id = :userId
+    ),
+    anchors AS (
+      SELECT
+        latitude  AS a_lat,
+        longitude AS a_lon,
+        local_time AS a_time,
+        h3_r9      AS anchor_cell,
+        idx        AS anchor_idx
+      FROM numbered
+      ${anchorFilter}
+    ),
+    ring AS (
+      SELECT a.*, explode(h3_kring(a.anchor_cell, :k)) AS cell
+      FROM anchors a
+    ),
+    candidates AS (
+      SELECT
+        a.anchor_idx,
+        2 * 6371 * ASIN(SQRT(
+          POWER(SIN(RADIANS(c.latitude - a.a_lat) / 2), 2) +
+          COS(RADIANS(a.a_lat)) * COS(RADIANS(c.latitude)) *
+          POWER(SIN(RADIANS(c.longitude - a.a_lon) / 2), 2)
+        )) AS dist_km,
+        ABS(TIMESTAMPDIFF(MINUTE, c.local_time, a.a_time)) AS minutes_apart
+      FROM ring a
+      JOIN ${CHECKINS_TABLE} c
+        ON c.h3_r9 = a.cell
+      WHERE c.user_id = :matchUserId
+        AND c.local_time BETWEEN a.a_time - MAKE_INTERVAL(0,0,0,0,:win,0,0)
+                             AND a.a_time + MAKE_INTERVAL(0,0,0,0,:win,0,0)
+    )
+    SELECT
+      n.idx,
+      n.local_time          AS anchor_time,
+      n.venue_category_name AS anchor_venue,
+      ROUND(MIN(cand.dist_km), 3) AS nearest_km,
+      MIN(cand.minutes_apart)     AS closest_min,
+      COUNT(*)                    AS encounters
+    FROM candidates cand
+    JOIN numbered n ON n.idx = cand.anchor_idx
+    WHERE cand.dist_km <= :radiusKm
+    GROUP BY n.idx, n.local_time, n.venue_category_name
+    ORDER BY closest_min, nearest_km
+    LIMIT :limit
+  `
+
+  return {
+    statement,
+    parameters: [
+      param('userId', userId),
+      param('matchUserId', matchUserId),
+      param('k', k, 'INT'),
+      param('win', windowHours, 'INT'),
+      param('radiusKm', radiusKm, 'DOUBLE'),
       param('limit', limit, 'INT'),
     ],
   }

@@ -33,13 +33,19 @@ export const api = {
   // User ID autocomplete.
   users: (prefix) => get(`/api/users?prefix=${encodeURIComponent(prefix)}`),
 
-  // F. Top users by check-in count — sidebar leaderboard.
+  // F. Top users by check-in count — sidebar leaderboard (shown when
+  // no specific user is searched on).
   topUsers: (limit = 100) => get(`/api/top-users?limit=${limit}`),
 
-  // G. Individual check-ins for one user — loaded on row expand.
+  // G. All check-ins for the searched user-of-interest.
   userCheckins: (userId) => get(`/api/user-checkins?userId=${encodeURIComponent(userId)}`),
 
-  // B + C. Spatiotemporal proximity search.
-  userSearch: ({ userId, radiusKm, windowHours, atTime }) =>
-    post('/api/user-search', { userId, radiusKm, windowHours, atTime }),
+  // H. Aggregated co-traveler search across all (or a checkbox subset
+  // via idxList) of the user-of-interest's check-ins.
+  coTravelers: ({ userId, radiusKm, windowHours, idxList }) =>
+    post('/api/co-travelers', { userId, radiusKm, windowHours, idxList }),
+
+  // I. Per-match overlap detail — loaded when a match row expands.
+  coTravelerOverlap: ({ userId, matchUserId, radiusKm, windowHours, idxList }) =>
+    post('/api/co-traveler-overlap', { userId, matchUserId, radiusKm, windowHours, idxList }),
 }
