@@ -33,9 +33,10 @@ export const api = {
   // User ID autocomplete.
   users: (prefix) => get(`/api/users?prefix=${encodeURIComponent(prefix)}`),
 
-  // F. Top users by check-in count — sidebar leaderboard (shown when
-  // no specific user is searched on).
-  topUsers: (limit = 100) => get(`/api/top-users?limit=${limit}`),
+  // F. Top users by check-in count within the viewport — sidebar
+  // leaderboard (shown when no specific user is searched on).
+  topUsers: ({ north, south, east, west, limit = 100 }) =>
+    post('/api/top-users', { north, south, east, west, limit }),
 
   // G. All check-ins for the searched user-of-interest.
   userCheckins: (userId) => get(`/api/user-checkins?userId=${encodeURIComponent(userId)}`),

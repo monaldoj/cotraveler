@@ -302,24 +302,33 @@ export function userSuggestQuery({ prefix, limit = 20 }) {
 }
 
 // ============================================================
-// F. Top users by check-in count
+// F. Top users by check-in count, scoped to the viewport
 //
-// Powers the sidebar leaderboard rendered on load. The full table has
-// millions of distinct users, so we only ever return the densest few
-// hundred — enough to browse without dragging the whole dimension to
-// the client.
+// Powers the sidebar leaderboard. It tracks the map the same way the
+// H3 bins do: counts reflect only the check-ins inside the current
+// bounding box, so panning/zooming re-ranks the users in view. The
+// full table has millions of distinct users, so we still cap to the
+// densest few hundred within the box.
 // ============================================================
-export function topUsersQuery({ limit = 100 }) {
+export function topUsersQuery({ north, south, east, west, limit = 100 }) {
   const statement = `
     SELECT user_id, COUNT(*) AS checkins
     FROM ${CHECKINS_TABLE}
+    WHERE latitude  BETWEEN :south AND :north
+      AND longitude BETWEEN :west  AND :east
     GROUP BY user_id
     ORDER BY checkins DESC, user_id
     LIMIT :limit
   `
   return {
     statement,
-    parameters: [param('limit', limit, 'INT')],
+    parameters: [
+      param('south', south, 'DOUBLE'),
+      param('north', north, 'DOUBLE'),
+      param('west', west, 'DOUBLE'),
+      param('east', east, 'DOUBLE'),
+      param('limit', limit, 'INT'),
+    ],
   }
 }
 

@@ -40,6 +40,10 @@ export default function App() {
   const [matches, setMatches] = useState(null)   // null = not yet searched
   const [searching, setSearching] = useState(false)
 
+  // Latest map viewport — shared by the H3 bins and the top-users
+  // leaderboard so both reflect the same bounding box.
+  const [viewport, setViewport] = useState(null)
+
   // Track the latest viewport request so out-of-order responses from
   // rapid panning don't clobber the current view.
   const reqSeq = useRef(0)
@@ -49,14 +53,16 @@ export default function App() {
     api.config().then(setConfig).catch(() => {})
   }, [])
 
-  // Flow 1 — viewport change -> debounced H3 bin query.
-  const onViewportChange = useCallback((viewport) => {
+  // Flow 1 — viewport change -> debounced H3 bin query. Also publish
+  // the (debounced) viewport so the leaderboard can re-rank in step.
+  const onViewportChange = useCallback((vp) => {
     clearTimeout(binDebounce.current)
     binDebounce.current = setTimeout(async () => {
+      setViewport(vp)
       const seq = ++reqSeq.current
       setLoadingBins(true)
       try {
-        const { bins } = await api.h3Bins(viewport)
+        const { bins } = await api.h3Bins(vp)
         if (seq === reqSeq.current) setBins(bins)
       } catch (err) {
         if (seq === reqSeq.current) setError(err.message)
@@ -156,6 +162,7 @@ export default function App() {
         setRadiusKm={setRadiusKm}
         windowHours={windowHours}
         setWindowHours={setWindowHours}
+        viewport={viewport}
         userOfInterest={userOfInterest}
         checkins={checkins}
         loadingCheckins={loadingCheckins}

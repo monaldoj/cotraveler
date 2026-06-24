@@ -15,24 +15,33 @@ import { useState, useEffect, useRef } from 'react'
 import { api } from '../api.js'
 
 // ------------------------------------------------------------
-// TopUsers — leaderboard shown when no user is searched on. Picking a
-// row commits that user as the user-of-interest.
+// TopUsers — leaderboard shown when no user is searched on. Counts are
+// scoped to the current map viewport and re-rank as you pan/zoom, the
+// same way the H3 bin rollups do. Picking a row commits that user as
+// the user-of-interest. A request sequence guards against out-of-order
+// responses from rapid panning.
 // ------------------------------------------------------------
-function TopUsers({ onPick }) {
+function TopUsers({ viewport, onPick }) {
   const [users, setUsers] = useState(null)
   const [error, setError] = useState(null)
+  const reqSeq = useRef(0)
 
   useEffect(() => {
-    api.topUsers().then(({ users }) => setUsers(users)).catch((e) => setError(e.message))
-  }, [])
+    if (!viewport) return   // wait for the map's first viewport report
+    const seq = ++reqSeq.current
+    api
+      .topUsers(viewport)
+      .then(({ users }) => { if (seq === reqSeq.current) setUsers(users) })
+      .catch((e) => { if (seq === reqSeq.current) setError(e.message) })
+  }, [viewport])
 
   if (error) return null
   if (users === null) return <p className="muted">Loading top users…</p>
-  if (!users.length) return null
+  if (!users.length) return <p className="muted">No users in this view</p>
 
   return (
     <div className="result">
-      <h2>Top users by check-ins</h2>
+      <h2>Top users in view</h2>
       <ul className="leaderboard">
         {users.map((u) => (
           <li key={u.userId}>
@@ -159,7 +168,7 @@ function MatchRow({ match, fetchOverlap }) {
 }
 
 export default function SearchPanel({
-  radiusKm, setRadiusKm, windowHours, setWindowHours,
+  radiusKm, setRadiusKm, windowHours, setWindowHours, viewport,
   userOfInterest, checkins, loadingCheckins, selected, matches, searching, error,
   onSearchUser, onClearUser, onToggleCheckin, onSelectAll, onSelectNone,
   onFindCoTravelers, fetchOverlap,
@@ -253,7 +262,9 @@ export default function SearchPanel({
       {error && <p className="error">{error}</p>}
 
       {/* No user searched → browse the leaderboard. */}
-      {!userOfInterest && !loadingCheckins && <TopUsers onPick={onSearchUser} />}
+      {!userOfInterest && !loadingCheckins && (
+        <TopUsers viewport={viewport} onPick={onSearchUser} />
+      )}
 
       {/* A user-of-interest is active → check-ins + co-traveler search. */}
       {userOfInterest && (

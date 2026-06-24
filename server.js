@@ -202,14 +202,20 @@ app.get('/api/users', async (req, res) => {
   }
 })
 
-// F. Top users by check-in count — the sidebar leaderboard.
-app.get('/api/top-users', async (req, res) => {
-  const limit = Math.min(Number(req.query.limit) || 100, 500)
+// F. Top users by check-in count, scoped to the map viewport.
+app.post('/api/top-users', async (req, res) => {
+  const { north, south, east, west, limit = 100 } = req.body || {}
+  if ([north, south, east, west].some((v) => v == null)) {
+    return res.status(400).json({ error: 'north, south, east, west required' })
+  }
   const token = await getToken()
   if (!token) return res.status(503).json({ error: 'no Databricks credentials' })
 
   try {
-    const rows = await executeSql(topUsersQuery({ limit }), token)
+    const rows = await executeSql(
+      topUsersQuery({ north, south, east, west, limit: Math.min(Number(limit) || 100, 500) }),
+      token,
+    )
     res.json({ users: rows.map((r) => ({ userId: r.user_id, checkins: Number(r.checkins) })) })
   } catch (err) {
     console.error('top-users error:', err.message)
