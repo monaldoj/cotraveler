@@ -10,6 +10,8 @@ import {
   userCheckpointQuery,
   proximitySearchQuery,
   userSuggestQuery,
+  topUsersQuery,
+  userCheckinsQuery,
 } from './queries.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -196,6 +198,47 @@ app.get('/api/users', async (req, res) => {
     res.json({ users: rows.map((r) => ({ userId: r.user_id, checkins: Number(r.checkins) })) })
   } catch (err) {
     console.error('users error:', err.message)
+    res.status(500).json({ error: err.message })
+  }
+})
+
+// F. Top users by check-in count — the sidebar leaderboard.
+app.get('/api/top-users', async (req, res) => {
+  const limit = Math.min(Number(req.query.limit) || 100, 500)
+  const token = await getToken()
+  if (!token) return res.status(503).json({ error: 'no Databricks credentials' })
+
+  try {
+    const rows = await executeSql(topUsersQuery({ limit }), token)
+    res.json({ users: rows.map((r) => ({ userId: r.user_id, checkins: Number(r.checkins) })) })
+  } catch (err) {
+    console.error('top-users error:', err.message)
+    res.status(500).json({ error: err.message })
+  }
+})
+
+// G. Individual check-ins for one user — loaded on row expand.
+app.get('/api/user-checkins', async (req, res) => {
+  const userId = (req.query.userId || '').toString()
+  if (!userId) return res.status(400).json({ error: 'userId required' })
+  const limit = Math.min(Number(req.query.limit) || 200, 1000)
+  const token = await getToken()
+  if (!token) return res.status(503).json({ error: 'no Databricks credentials' })
+
+  try {
+    const rows = await executeSql(userCheckinsQuery({ userId, limit }), token)
+    res.json({
+      userId,
+      checkins: rows.map((r) => ({
+        time: r.local_time,
+        venue: r.venue_category_name,
+        country: r.country_code,
+        lat: Number(r.latitude),
+        lon: Number(r.longitude),
+      })),
+    })
+  } catch (err) {
+    console.error('user-checkins error:', err.message)
     res.status(500).json({ error: err.message })
   }
 })

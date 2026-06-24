@@ -300,3 +300,54 @@ export function userSuggestQuery({ prefix, limit = 20 }) {
     ],
   }
 }
+
+// ============================================================
+// F. Top users by check-in count
+//
+// Powers the sidebar leaderboard rendered on load. The full table has
+// millions of distinct users, so we only ever return the densest few
+// hundred — enough to browse without dragging the whole dimension to
+// the client.
+// ============================================================
+export function topUsersQuery({ limit = 100 }) {
+  const statement = `
+    SELECT user_id, COUNT(*) AS checkins
+    FROM ${CHECKINS_TABLE}
+    GROUP BY user_id
+    ORDER BY checkins DESC, user_id
+    LIMIT :limit
+  `
+  return {
+    statement,
+    parameters: [param('limit', limit, 'INT')],
+  }
+}
+
+// ============================================================
+// G. Individual check-ins for one user
+//
+// Loaded lazily when an analyst expands a user row in the leaderboard.
+// Most-recent-first so the latest activity is on top. venue_category_name
+// lives on the check-ins table directly, so no POIs join is needed.
+// ============================================================
+export function userCheckinsQuery({ userId, limit = 200 }) {
+  const statement = `
+    SELECT
+      local_time,
+      venue_category_name,
+      country_code,
+      latitude,
+      longitude
+    FROM ${CHECKINS_TABLE}
+    WHERE user_id = :userId
+    ORDER BY local_time DESC
+    LIMIT :limit
+  `
+  return {
+    statement,
+    parameters: [
+      param('userId', userId),
+      param('limit', limit, 'INT'),
+    ],
+  }
+}

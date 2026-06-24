@@ -33,6 +33,12 @@ export const api = {
   // User ID autocomplete.
   users: (prefix) => get(`/api/users?prefix=${encodeURIComponent(prefix)}`),
 
+  // F. Top users by check-in count — sidebar leaderboard.
+  topUsers: (limit = 100) => get(`/api/top-users?limit=${limit}`),
+
+  // G. Individual check-ins for one user — loaded on row expand.
+  userCheckins: (userId) => get(`/api/user-checkins?userId=${encodeURIComponent(userId)}`),
+
   // B + C. Spatiotemporal proximity search.
   userSearch: ({ userId, radiusKm, windowHours, atTime }) =>
     post('/api/user-search', { userId, radiusKm, windowHours, atTime }),

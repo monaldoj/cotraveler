@@ -133,6 +133,78 @@ body {
 
 .muted { color: var(--muted); font-size: 12px; }
 
+/* ---- User leaderboard ---- */
+.leaderboard {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  font-size: 13px;
+}
+
+.leaderboard > li { border-bottom: 1px solid var(--border); }
+
+.user-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 0;
+  cursor: pointer;
+}
+
+.user-row .caret {
+  font-size: 9px;
+  color: var(--muted);
+  transition: transform 0.15s;
+  flex-shrink: 0;
+}
+.user-row .caret.open { transform: rotate(90deg); }
+
+.user-row .user-id { font-weight: 600; }
+
+.user-row .user-count {
+  margin-left: auto;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.user-row .pick {
+  width: auto;
+  flex-shrink: 0;
+  padding: 3px 8px;
+  font-size: 11px;
+  font-weight: 600;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--muted);
+}
+.user-row .pick:hover {
+  border-color: var(--accent);
+  color: var(--text);
+}
+
+.checkins { padding: 0 0 8px 18px; }
+
+.checkin-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  max-height: 240px;
+  overflow-y: auto;
+}
+
+.checkin-list li {
+  padding: 6px 0;
+  border-bottom: 1px solid var(--border);
+}
+.checkin-list li:last-child { border-bottom: none; }
+
+.checkin-list .ts {
+  font-variant-numeric: tabular-nums;
+  font-size: 12px;
+}
+.checkin-list small { color: var(--muted); }
+
 /* ---- Map ---- */
 .map-wrap {
   position: relative;
