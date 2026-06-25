@@ -20,16 +20,18 @@ const app = express()
 const PORT = process.env.PORT || 8000
 
 // Databricks workspace host — normalized to include the scheme.
-const rawHost = process.env.DATABRICKS_HOST || 'https://fevm-pubsec-ai.cloud.databricks.com'
-const DB_HOST = rawHost.startsWith('http') ? rawHost : `https://${rawHost}`
+// Required: set DATABRICKS_HOST per-workspace (in a deployed Databricks
+// App it is injected automatically).
+const rawHost = process.env.DATABRICKS_HOST || ''
+const DB_HOST = rawHost.startsWith('http') ? rawHost : rawHost ? `https://${rawHost}` : ''
 
 // Warehouse that runs the H3 SQL. Prefer WAREHOUSE_ID; otherwise
 // derive it from a classic SQL_WAREHOUSE_HTTP_PATH like
-// /sql/1.0/warehouses/<id> so either env var works.
+// /sql/1.0/warehouses/<id> so either env var works. Required per-workspace.
 const WAREHOUSE_ID =
   process.env.WAREHOUSE_ID ||
   (process.env.SQL_WAREHOUSE_HTTP_PATH || '').split('/').pop() ||
-  'c6881915e0a8c7c6'
+  ''
 
 // ------------------------------------------------------------
 // Auth — Databricks Apps uses M2M OAuth; locally we accept a PAT.
@@ -149,7 +151,10 @@ app.post('/api/h3-bins', async (req, res) => {
   if (!token) return res.status(503).json({ error: 'no Databricks credentials' })
 
   try {
-    const q = viewportBinsQuery({ north, south, east, west, zoom, maxCells })
+    // Render cap: draw at most 5000 (densest) hexagons to keep the
+    // browser smooth. The query still reports full-viewport totals.
+    const cap = Math.min(Number(maxCells) || 5000, 5000)
+    const q = viewportBinsQuery({ north, south, east, west, zoom, maxCells: cap })
     const rows = await executeSql(q, token)
     // Parse each hexagon's GeoJSON boundary once, server-side.
     const bins = rows.map((r) => ({
@@ -157,7 +162,11 @@ app.post('/api/h3-bins', async (req, res) => {
       count: Number(r.cnt),
       boundary: JSON.parse(r.boundary),
     }))
-    res.json({ bins, zoom })
+    // Full-viewport totals (pre-cap) ride every row identically; read
+    // them off the first row. Empty viewport => zeros.
+    const totalCells = rows.length ? Number(rows[0].total_cells) : 0
+    const totalRecords = rows.length ? Number(rows[0].total_records) : 0
+    res.json({ bins, zoom, totalCells, totalRecords, capped: totalCells > bins.length })
   } catch (err) {
     console.error('h3-bins error:', err.message)
     res.status(500).json({ error: err.message })
@@ -370,8 +379,11 @@ app.get('{*path}', (req, res) => {
 
 app.listen(PORT, '0.0.0.0', async () => {
   console.log(`CO-TRAVELER server running on port ${PORT}`)
+  console.log(`  host:      ${DB_HOST || '(unset — set DATABRICKS_HOST)'}`)
   console.log(`  table:     ${CHECKINS_TABLE}`)
-  console.log(`  warehouse: ${WAREHOUSE_ID}`)
+  console.log(`  warehouse: ${WAREHOUSE_ID || '(unset — set WAREHOUSE_ID or SQL_WAREHOUSE_HTTP_PATH)'}`)
+  if (!DB_HOST) console.warn('WARNING: DATABRICKS_HOST is not set — SQL calls will fail.')
+  if (!WAREHOUSE_ID) console.warn('WARNING: no warehouse configured — set WAREHOUSE_ID or SQL_WAREHOUSE_HTTP_PATH.')
 
   // Warm the warehouse so the first map query is fast (mirrors anvil).
   setTimeout(async () => {

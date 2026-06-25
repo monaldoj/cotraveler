@@ -1,17 +1,29 @@
+# Databricks App manifest.
+#
+# IMPORTANT: app.yaml is the source of truth for the app's `command` and
+# `env`. The bundle's `resources.apps.cotraveler.config` block in
+# databricks.yml does NOT deploy env vars into the running app — only the
+# resource bindings under `resources:` do. So the warehouse id must be
+# wired here, via `valueFrom` against the bound `sql-warehouse` resource.
+#
+# WAREHOUSE_ID is resolved at runtime from the `sql-warehouse` resource
+# binding (its id flows from the `warehouse_id` bundle variable through
+# databricks.yml). app.yaml itself cannot use `${var.*}` interpolation —
+# only databricks.yml can — so the binding is how the id reaches the app.
+#
+# DATABRICKS_CATALOG / DATABRICKS_SCHEMA have no resource to reference and
+# app.yaml cannot use `${var.*}` interpolation, so they are hardcoded
+# below. CHANGE THESE to the catalog/schema that hold your checkins_h3 /
+# pois tables before deploying to a different workspace.
+# (DATABRICKS_HOST and the M2M OAuth credentials are injected by the
+# Apps runtime automatically.)
 command:
   - node
   - server.js
-
 env:
-  # Warehouse that runs the H3 spatial SQL. Override per-workspace if needed.
   - name: WAREHOUSE_ID
-    value: c6881915e0a8c7c6
-  # Fully-qualified Unity Catalog table backing the map.
-  - name: CHECKINS_TABLE
-    value: justinm_demo.cotraveler.checkins_h3
-
-resources:
-  - name: sql-warehouse
-    sql_warehouse:
-      id: c6881915e0a8c7c6
-      permission: CAN_USE
+    valueFrom: sql-warehouse
+  - name: DATABRICKS_CATALOG
+    value: justinm_demo
+  - name: DATABRICKS_SCHEMA
+    value: cotraveler

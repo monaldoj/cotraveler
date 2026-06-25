@@ -18,16 +18,6 @@ The app only assembles parameterized statements and draws the results.
 └─────────────┘                       └──────────────┘             └────────────┘
 ```
 
-This app blends:
-
-- **Architecture & style of `anvil`** (Repo A): Node + Express server,
-  the same `getToken()` auth ladder, the SQL Statement Execution REST
-  API as the single Databricks seam, a Vite-built React SPA served from
-  `dist/`, and the `app.yaml` + `resources` deployment pattern.
-- **Geospatial features of the H3 viz app** (Repo B): H3 binning,
-  viewport-driven re-aggregation, and H3-function-based proximity
-  search.
-
 ---
 
 ## Project structure
@@ -49,6 +39,9 @@ cotraveler/
 │   └── components/
 │       ├── Map.jsx       # Leaflet map, H3 hexbin layer, viewport callbacks
 │       └── SearchPanel.jsx  # sidebar: User ID / Radius / Time Window
+├── notebooks/            # run these once to build + populate the tables
+│   ├── 00 Foursquare Co-traveler Dataset Ingestion.ipynb
+│   └── 01 Foursquare H3 Index Enrichment.ipynb
 └── dist/                 # built frontend (created by `npm run build`)
 ```
 
@@ -67,8 +60,12 @@ cotraveler/
 
 ## Data
 
-Backed by the Unity Catalog table
-[`justinm_demo.cotraveler.checkins_h3`](https://fevm-pubsec-ai.cloud.databricks.com/explore/data/justinm_demo/cotraveler/checkins_h3?o=7474660041786923).
+Backed by a Unity Catalog table `<catalog>.<schema>.checkins_h3` (plus a
+`<catalog>.<schema>.pois` table for venue categories). The catalog and
+schema are set via the `DATABRICKS_CATALOG` / `DATABRICKS_SCHEMA` env
+vars (see below) — locally as exports, and for the deployed app as
+values hardcoded in `app.yaml`. Point the app at a different workspace
+by editing those two values in `app.yaml`.
 
 | column | type | notes |
 |---|---|---|
@@ -86,6 +83,23 @@ The table is **clustered on `(user_id, h3_r9, local_time)`** — the
 queries are written to ride that clustering (anchor lookup by
 `user_id`, proximity prune by `h3_r9`, time-window filter on
 `local_time`).
+
+### Build the tables first
+
+The two tables the app reads (`checkins_h3` and `pois`) are built by the
+notebooks in [`./notebooks`](./notebooks) — **run these once, in order,
+before deploying the app:**
+
+1. **`00 Foursquare Co-traveler Dataset Ingestion.ipynb`** — creates the
+   schema + a volume, downloads the raw Foursquare files, and loads them
+   into the `checkins_raw` and `pois` Delta tables.
+2. **`01 Foursquare H3 Index Enrichment.ipynb`** — joins check-ins with
+   POIs, computes the H3 cell ids at each resolution, derives
+   `local_time`, and writes the final clustered `checkins_h3` table.
+
+Both notebooks take `catalog` and `schema` widget values — set them to
+the **same** catalog/schema you'll point the app at via
+`DATABRICKS_CATALOG` / `DATABRICKS_SCHEMA` (below).
 
 ---
 
@@ -121,28 +135,51 @@ colored by a log-scaled density ramp.
 
 | Variable | Required | Purpose |
 |---|---|---|
-| `DATABRICKS_HOST` | yes | Workspace URL, e.g. `https://fevm-pubsec-ai.cloud.databricks.com` |
+| `DATABRICKS_HOST` | yes\*\* | Workspace URL, e.g. `https://my-workspace.cloud.databricks.com`. Injected automatically in a deployed Databricks App. |
 | `DATABRICKS_TOKEN` | local only | Personal Access Token for local dev. In a deployed Databricks App, auth is automatic (M2M OAuth) and this is **not** set. |
-| `SQL_WAREHOUSE_HTTP_PATH` | yes\* | e.g. `/sql/1.0/warehouses/c6881915e0a8c7c6`. The warehouse id is parsed from the tail. |
-| `WAREHOUSE_ID` | yes\* | Alternative to the HTTP path — just the id, e.g. `c6881915e0a8c7c6`. |
-| `CHECKINS_TABLE` | no | Override the source table (default `justinm_demo.cotraveler.checkins_h3`). |
+| `SQL_WAREHOUSE_HTTP_PATH` | yes\* | e.g. `/sql/1.0/warehouses/<id>`. The warehouse id is parsed from the tail. |
+| `WAREHOUSE_ID` | yes\* | Alternative to the HTTP path — just the id, e.g. `abc123def456`. |
+| `DATABRICKS_CATALOG` | no | Unity Catalog catalog holding the tables. Server default `main`; the deployed app sets `justinm_demo` via `app.yaml`. |
+| `DATABRICKS_SCHEMA` | no | Unity Catalog schema holding `checkins_h3` and `pois`. Default `cotraveler` (also set in `app.yaml`). |
+| `CHECKINS_TABLE` | no | Override the full check-ins table name. Defaults to `<DATABRICKS_CATALOG>.<DATABRICKS_SCHEMA>.checkins_h3`. |
+| `POIS_TABLE` | no | Override the full POIs table name. Defaults to `<DATABRICKS_CATALOG>.<DATABRICKS_SCHEMA>.pois`. |
 
 \* Provide **either** `SQL_WAREHOUSE_HTTP_PATH` **or** `WAREHOUSE_ID`.
 
-For the target workspace the running warehouse is **`ai-wh`**
-(`c6881915e0a8c7c6`), HTTP path `/sql/1.0/warehouses/c6881915e0a8c7c6`.
+\*\* Required when running locally or deploying outside the bundle. The
+Databricks Apps runtime injects `DATABRICKS_HOST` (and OAuth credentials)
+automatically.
+
+> **Setting catalog/schema.** Locally, export `DATABRICKS_CATALOG` +
+> `DATABRICKS_SCHEMA`. For the deployed app they are hardcoded in
+> `app.yaml` — edit them there to point at your workspace's tables. Only
+> set `CHECKINS_TABLE` / `POIS_TABLE` directly if your two tables don't
+> live under the same `catalog.schema`.
 
 ---
 
 ## Run locally
 
+> **npm registry note:** The committed `package-lock.json` pins the public
+> npm registry (`registry.npmjs.org`), so the Databricks Apps build installs
+> with no extra config. On the Databricks corporate network the public
+> registry is unreachable — set `NPM_CONFIG_REGISTRY` to the internal proxy
+> for local installs (npm rewrites the lockfile hosts to the proxy at fetch
+> time). Leave it unset everywhere else.
+>
+> ```bash
+> export NPM_CONFIG_REGISTRY=https://npm-proxy.cloud.databricks.com/
+> ```
+
 ```bash
 cd cotraveler
-npm install
+npm install                 # set NPM_CONFIG_REGISTRY first if on the corp network
 
-export DATABRICKS_HOST="https://fevm-pubsec-ai.cloud.databricks.com"
+export DATABRICKS_HOST="https://my-workspace.cloud.databricks.com"
 export DATABRICKS_TOKEN="dapi..."                       # your PAT
-export SQL_WAREHOUSE_HTTP_PATH="/sql/1.0/warehouses/c6881915e0a8c7c6"
+export SQL_WAREHOUSE_HTTP_PATH="/sql/1.0/warehouses/<your-warehouse-id>"
+export DATABRICKS_CATALOG="justinm_demo"                # your catalog
+export DATABRICKS_SCHEMA="cotraveler"                   # your schema
 
 # Option 1 — production-style: build the SPA, serve everything from Express
 npm run build
@@ -154,59 +191,71 @@ npm run dev               # frontend on :5173, proxies /api -> :8000
 ```
 
 > Need an interactive Databricks login instead of a PAT? In this Claude
-> Code session you can run `! databricks auth login --host https://fevm-pubsec-ai.cloud.databricks.com`
+> Code session you can run `! databricks auth login --host https://my-workspace.cloud.databricks.com`
 > and export the resulting token.
 
 ---
 
-## Deploy as a Databricks App
+## Deploy as a Databricks App (Asset Bundle)
 
-1. **Build the frontend** (the App runs `node server.js`, which serves
-   `dist/` — there is no build step on the App side):
-   ```bash
-   npm install && npm run build
-   ```
+The repo ships a workspace-agnostic Databricks Asset Bundle
+(`databricks.yml`) — every workspace-specific value is passed in at
+deploy time, so there's nothing in the repo to edit.
 
-2. **Sync the folder** to your workspace and create the app:
-   ```bash
-   databricks sync . /Workspace/Users/<you>/cotraveler --watch
-   databricks apps create cotraveler
-   databricks apps deploy cotraveler \
-     --source-code-path /Workspace/Users/<you>/cotraveler
-   ```
-   (Or use the **Apps** UI: New App → from workspace folder.)
+**Before you start**, the Databricks CLI needs credentials for your
+workspace. Set both in your local environment:
 
-3. **`app.yaml`** already declares the entrypoint, env, and the
-   warehouse resource. Grant the app's service principal `CAN_USE` on
-   the warehouse and `SELECT` on `justinm_demo.cotraveler.checkins_h3`.
-   No token is needed in the deployed app — `getToken()` uses the
-   injected `DATABRICKS_CLIENT_ID`/`DATABRICKS_CLIENT_SECRET` to fetch
-   an M2M OAuth token automatically.
-
-```yaml
-command:
-  - node
-  - server.js
-
-env:
-  - name: WAREHOUSE_ID
-    value: c6881915e0a8c7c6
-  - name: CHECKINS_TABLE
-    value: justinm_demo.cotraveler.checkins_h3
-
-resources:
-  - name: sql-warehouse
-    sql_warehouse:
-      id: c6881915e0a8c7c6
-      permission: CAN_USE
+```bash
+export DATABRICKS_HOST="https://my-workspace.cloud.databricks.com"
+export DATABRICKS_TOKEN="dapi..."   # a PAT for that workspace
 ```
+
+> Without these two, `databricks bundle deploy` can't authenticate and
+> will fail. (Alternatively, `databricks auth login` + `--profile <name>`
+> works too.)
+
+Then deploy:
+
+```bash
+# 1. Build the frontend (the app serves dist/ — no build step on the app side)
+npm install && npm run build
+
+# 2. Deploy, passing your warehouse id
+databricks bundle deploy -t dev \
+  --var="warehouse_id=<your-warehouse-id>"
+
+# 3. Start the app
+databricks bundle run cotraveler -t dev
+```
+
+`warehouse_id` binds the SQL warehouse as a `CAN_USE` resource named
+`sql-warehouse`; `app.yaml` reads its id at runtime via
+`valueFrom: sql-warehouse` and exposes it as `WAREHOUSE_ID`. (App env
+vars only deploy from `app.yaml` and resource bindings — *not* from a
+bundle `config.env` block — so the warehouse id has to travel through
+the binding.)
+
+**Set the table location before deploying.** `DATABRICKS_CATALOG` and
+`DATABRICKS_SCHEMA` have no resource to bind to, and `app.yaml` cannot
+use `${var.*}` interpolation, so they are **hardcoded in `app.yaml`**
+(defaults `justinm_demo` / `cotraveler`). To point the app at a
+different catalog/schema, edit the `DATABRICKS_CATALOG` /
+`DATABRICKS_SCHEMA` `value:` fields in `app.yaml` before deploying.
+
+Targets are `dev` (default) and `prod` (use `-t prod` for a shared
+production deploy under `/Workspace/Shared`).
+
+**After the first deploy**, grant the app's service principal `SELECT`
+on `<catalog>.<schema>.checkins_h3` and `<catalog>.<schema>.pois`. No
+token is needed inside the deployed app — it authenticates via the
+injected M2M OAuth credentials automatically.
 
 ---
 
 ## Tested SQL
 
-Both core queries were validated against the live table
-(90,048,627 rows, 2,733,324 users, 2012–2014) on the `ai-wh` warehouse:
+Both core queries were validated against a live table
+(90,048,627 rows, 2,733,324 users, 2012–2014) on a SQL warehouse:
 viewport binning returns hexbins with GeoJSON boundaries, and the
 proximity search for user `1085789` (radius 2 km, ± 48 h) returns
 ranked co-traveler records by distance and time delta.

@@ -14,26 +14,41 @@
 // SQL strings.
 // ============================================================
 
+// Unity Catalog location for the backing tables. The catalog + schema
+// are supplied per-workspace via env vars (DATABRICKS_CATALOG /
+// DATABRICKS_SCHEMA) so the app deploys onto any workspace without code
+// changes. The full table names are derived from them, but each can
+// still be overridden wholesale via CHECKINS_TABLE / POIS_TABLE for the
+// rare case where the tables don't share a catalog.schema.
+const CATALOG = process.env.DATABRICKS_CATALOG || 'main'
+const SCHEMA = process.env.DATABRICKS_SCHEMA || 'cotraveler'
+
 // Fully-qualified Unity Catalog table backing every query.
 export const CHECKINS_TABLE =
-  process.env.CHECKINS_TABLE || 'justinm_demo.cotraveler.checkins_h3'
+  process.env.CHECKINS_TABLE || `${CATALOG}.${SCHEMA}.checkins_h3`
 
 // Points-of-interest table: one row per venue_id with its category.
 // Joined to the check-ins on venue_id so a hexagon can be broken down
 // by the venue categories its check-ins belong to.
 export const POIS_TABLE =
-  process.env.POIS_TABLE || 'justinm_demo.cotraveler.pois'
+  process.env.POIS_TABLE || `${CATALOG}.${SCHEMA}.pois`
 
 // H3 resolution used for each map zoom band. Lower zoom => coarser
 // hexagons (smaller resolution number) so the bin count stays sane.
-// The table is physically clustered on h3_r9, so resolutions at or
-// below 9 prune well; higher zooms fall back to r9 + lat/lon.
+// Every band now maps to a PRE-COMPUTED column (h3_r3/r5/r7/r9/r12),
+// so we never recompute cells on the fly — even the global view rides
+// the new h3_r3 column instead of a full-scan h3_longlatash3(...).
+//
+// The bands are intentionally coarse-leaning: pushing each resolution
+// up to a higher zoom keeps the distinct-cell count low, so a single
+// viewport rarely exceeds the render cap and we can show "all" the
+// data that's actually visible at that scale.
 export function resolutionForZoom(zoom) {
-  if (zoom <= 4) return { res: 3, col: null }   // continental
-  if (zoom <= 6) return { res: 5, col: 'h3_r5' }
-  if (zoom <= 9) return { res: 7, col: 'h3_r7' }
-  if (zoom <= 12) return { res: 9, col: 'h3_r9' }
-  return { res: 12, col: 'h3_r12' }              // street level
+  if (zoom <= 5) return { res: 3, col: 'h3_r3' }    // global / continental
+  if (zoom <= 8) return { res: 5, col: 'h3_r5' }    // country / region
+  if (zoom <= 11) return { res: 7, col: 'h3_r7' }   // metro
+  if (zoom <= 14) return { res: 9, col: 'h3_r9' }   // neighborhood
+  return { res: 12, col: 'h3_r12' }                 // street level
 }
 
 // ------------------------------------------------------------
@@ -57,14 +72,24 @@ function param(name, value, type = 'STRING') {
 // directly by Databricks (h3_boundaryasgeojson) so the frontend
 // just draws polygons — no client-side H3 library required.
 // ============================================================
-export function viewportBinsQuery({ north, south, east, west, zoom, maxCells = 2000 }) {
+export function viewportBinsQuery({ north, south, east, west, zoom, maxCells = 5000 }) {
   const { res, col } = resolutionForZoom(zoom)
 
-  // When a pre-computed H3 column exists for this resolution we GROUP
-  // BY it (cheap, hits the clustering key). Otherwise compute the cell
-  // on the fly with h3_longlatash3(lng, lat, res).
+  // Every zoom band now has a pre-computed H3 column, so we always
+  // GROUP BY it (cheap, rides the clustering key). The fallback to an
+  // on-the-fly h3_longlatash3(...) is kept only as a safety net for an
+  // unexpected resolution with no column.
   const cellExpr = col ? col : `h3_longlatash3(longitude, latitude, ${res})`
 
+  // We cap how many hexagons we DRAW (densest `maxCells` cells) to keep
+  // the browser responsive, but we still report the truth about the
+  // whole viewport. `binned` aggregates EVERY populated cell; `totals`
+  // rolls that up into the full-viewport figures the overlay shows:
+  //   total_cells   — distinct populated hexagons in view (pre-cap)
+  //   total_records — check-ins aggregated across ALL those hexagons
+  // `top` then keeps only the densest `maxCells` cells to draw, and a
+  // CROSS JOIN carries the (single-row) totals onto each drawn row.
+  // (Spark rejects SUM(COUNT(*)) OVER (), hence the explicit roll-up.)
   const statement = `
     WITH viewport AS (
       SELECT ${col ? col : 'latitude, longitude'}
@@ -76,14 +101,21 @@ export function viewportBinsQuery({ north, south, east, west, zoom, maxCells = 2
       SELECT ${cellExpr} AS cell, COUNT(*) AS cnt
       FROM viewport
       GROUP BY ${cellExpr}
-      ORDER BY cnt DESC
-      LIMIT :maxCells
+    ),
+    totals AS (
+      SELECT COUNT(*) AS total_cells, SUM(cnt) AS total_records FROM binned
+    ),
+    top AS (
+      SELECT cell, cnt FROM binned ORDER BY cnt DESC LIMIT :maxCells
     )
     SELECT
-      h3_h3tostring(cell)          AS h3,
-      h3_boundaryasgeojson(cell)   AS boundary,
-      cnt
-    FROM binned
+      h3_h3tostring(top.cell)        AS h3,
+      h3_boundaryasgeojson(top.cell) AS boundary,
+      top.cnt                        AS cnt,
+      totals.total_cells             AS total_cells,
+      totals.total_records           AS total_records
+    FROM top CROSS JOIN totals
+    ORDER BY cnt DESC
   `
 
   return {

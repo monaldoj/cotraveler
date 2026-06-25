@@ -1,0 +1,71 @@
+# Databricks Asset Bundle for the Co-Traveler app.
+#
+#   databricks bundle deploy -t dev \
+#     --var="warehouse_id=<id>" --var="catalog=<cat>" --var="schema=<sch>"
+#   databricks bundle run cotraveler -t dev
+#
+# This bundle is workspace-agnostic: everything specific to a workspace
+# (host, warehouse, Unity Catalog location) is supplied through the
+# variables below, either on the command line (--var=...), via
+# BUNDLE_VAR_<name> environment variables, or per-target overrides.
+#
+# The warehouse id flows from the `warehouse_id` variable into the
+# `sql-warehouse` resource binding below; app.yaml then reads it at runtime
+# via `valueFrom: sql-warehouse`. (App env vars do NOT deploy from a bundle
+# `config.env` block — only resource bindings do — so the binding is the
+# channel. Catalog/schema are set per-workspace in the App UI.)
+bundle:
+  name: cotraveler
+
+# ------------------------------------------------------------
+# Deployment variables — override per workspace.
+# ------------------------------------------------------------
+variables:
+  warehouse_id:
+    description: SQL warehouse id that runs the H3 spatial SQL.
+  catalog:
+    description: Unity Catalog catalog holding the check-in tables.
+    default: main
+  schema:
+    description: Unity Catalog schema holding checkins_h3 and pois.
+    default: cotraveler
+
+# Files synced to the workspace alongside this bundle. node_modules and
+# the local mlflow.db are never needed in the deployed app.
+sync:
+  exclude:
+    - node_modules
+    - mlflow.db
+    - .databricks
+
+resources:
+  apps:
+    cotraveler:
+      name: cotraveler
+      description: "H3 spatiotemporal co-traveler proximity explorer"
+      # Deploy from the bundle's synced source folder.
+      source_code_path: ./
+      # Bind the SQL warehouse so app.yaml can read its id at runtime via
+      # `valueFrom: sql-warehouse`. The id is supplied per-workspace by the
+      # `warehouse_id` bundle variable. (command + env live in app.yaml,
+      # which is the source of truth for the app's config — a bundle
+      # `config.env` block does NOT deploy env to the running app.)
+      resources:
+        - name: sql-warehouse
+          sql_warehouse:
+            id: ${var.warehouse_id}
+            permission: CAN_USE
+
+# The workspace host is intentionally NOT set here — workspace.host does
+# not support variable interpolation. Supply it at deploy time via the
+# DATABRICKS_HOST environment variable or `--profile <name>` so the same
+# bundle targets any workspace.
+targets:
+  dev:
+    mode: development
+    default: true
+
+  prod:
+    mode: production
+    workspace:
+      root_path: /Workspace/Shared/.bundle/${bundle.name}/${bundle.target}

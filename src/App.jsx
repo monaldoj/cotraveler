@@ -19,6 +19,9 @@ import { api } from './api.js'
 
 export default function App() {
   const [bins, setBins] = useState([])
+  // Full-viewport aggregate stats (pre-render-cap): how many hexagons
+  // are actually populated in view and how many records they hold.
+  const [binStats, setBinStats] = useState({ totalCells: 0, totalRecords: 0, capped: false })
   const [loadingBins, setLoadingBins] = useState(false)
   const [config, setConfig] = useState(null)
   const [error, setError] = useState(null)
@@ -73,12 +76,18 @@ export default function App() {
   // out-of-order responses. No-op (and clears the layer) when hexbins
   // are toggled off.
   const fetchBins = useCallback(async (vp) => {
-    if (!showHexbinsRef.current) { setBins([]); setLoadingBins(false); return }
+    if (!showHexbinsRef.current) {
+      setBins([]); setBinStats({ totalCells: 0, totalRecords: 0, capped: false })
+      setLoadingBins(false); return
+    }
     const seq = ++reqSeq.current
     setLoadingBins(true)
     try {
-      const { bins } = await api.h3Bins(vp)
-      if (seq === reqSeq.current) setBins(bins)
+      const { bins, totalCells, totalRecords, capped } = await api.h3Bins(vp)
+      if (seq === reqSeq.current) {
+        setBins(bins)
+        setBinStats({ totalCells, totalRecords, capped })
+      }
     } catch (err) {
       if (seq === reqSeq.current) setError(err.message)
     } finally {
@@ -92,7 +101,10 @@ export default function App() {
     setShowHexbins((on) => {
       const next = !on
       showHexbinsRef.current = next
-      if (!next) { setBins([]); reqSeq.current++ }   // cancel any in-flight result
+      if (!next) {
+        setBins([]); setBinStats({ totalCells: 0, totalRecords: 0, capped: false })
+        reqSeq.current++   // cancel any in-flight result
+      }
       else if (viewport) fetchBins(viewport)
       return next
     })
@@ -262,7 +274,9 @@ export default function App() {
         <div className="status">
           {!showHexbins
             ? 'Hexbins hidden'
-            : loadingBins ? 'Querying H3 bins…' : `${bins.length} hexbins in view`}
+            : loadingBins
+              ? 'Querying H3 bins…'
+              : `${binStats.capped ? `${bins.length.toLocaleString()}+` : bins.length.toLocaleString()} hexbins, ${binStats.totalRecords.toLocaleString()} total records`}
           {config && (
             <span className="conn">
               {config.connected ? ' · live' : ' · no warehouse'} · {config.table}
