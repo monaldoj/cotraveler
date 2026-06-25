@@ -139,8 +139,8 @@ colored by a log-scaled density ramp.
 | `DATABRICKS_TOKEN` | local only | Personal Access Token for local dev. In a deployed Databricks App, auth is automatic (M2M OAuth) and this is **not** set. |
 | `SQL_WAREHOUSE_HTTP_PATH` | yes\* | e.g. `/sql/1.0/warehouses/<id>`. The warehouse id is parsed from the tail. |
 | `WAREHOUSE_ID` | yes\* | Alternative to the HTTP path — just the id, e.g. `abc123def456`. |
-| `DATABRICKS_CATALOG` | no | Unity Catalog catalog holding the tables. Server default `main`; the deployed app sets `justinm_demo` via `app.yaml`. |
-| `DATABRICKS_SCHEMA` | no | Unity Catalog schema holding `checkins_h3` and `pois`. Default `cotraveler` (also set in `app.yaml`). |
+| `DATABRICKS_CATALOG` | local only | Unity Catalog catalog holding the tables. Set this when running locally; the deployed app hardcodes `justinm_demo` in `app.yaml`. Server default `main`. |
+| `DATABRICKS_SCHEMA` | local only | Unity Catalog schema holding `checkins_h3` and `pois`. Set this when running locally; the deployed app hardcodes `cotraveler` in `app.yaml`. Server default `cotraveler`. |
 | `CHECKINS_TABLE` | no | Override the full check-ins table name. Defaults to `<DATABRICKS_CATALOG>.<DATABRICKS_SCHEMA>.checkins_h3`. |
 | `POIS_TABLE` | no | Override the full POIs table name. Defaults to `<DATABRICKS_CATALOG>.<DATABRICKS_SCHEMA>.pois`. |
 
