@@ -1,5 +1,7 @@
 # Co-Traveler — H3 Spatiotemporal Proximity Explorer
 
+<img width="2001" height="1184" alt="cotraveler-screenshot" src="https://github.com/user-attachments/assets/c8bd8738-7c1e-4339-b16e-5065a7be7d2e" />
+
 An interactive Databricks App that visualizes 90M+ Foursquare-style
 check-ins as dynamic **H3 hexbins** on a Leaflet map, and runs
 **spatiotemporal proximity searches** to find the "co-travelers" of a
