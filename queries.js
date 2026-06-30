@@ -447,7 +447,7 @@ export function coTravelersAggQuery({
   // Anchor selection: an explicit checkbox subset, or the first N.
   const anchorFilter =
     idxList && idxList.length
-      ? `WHERE idx IN (${idxList.map((n) => parseInt(n, 10)).filter(Number.isFinite).join(',')})`
+      ? `-- WHERE idx IN (${idxList.map((n) => parseInt(n, 10)).filter(Number.isFinite).join(',')})`
       : `ORDER BY idx -- LIMIT ${parseInt(maxAnchors, 10)}`
 
   const statement = `
@@ -535,8 +535,8 @@ export function coTravelerOverlapQuery({
 
   const anchorFilter =
     idxList && idxList.length
-      ? `WHERE idx IN (${idxList.map((n) => parseInt(n, 10)).filter(Number.isFinite).join(',')})`
-      : `ORDER BY idx LIMIT ${parseInt(maxAnchors, 10)}`
+      ? `-- WHERE idx IN (${idxList.map((n) => parseInt(n, 10)).filter(Number.isFinite).join(',')})`
+      : `ORDER BY idx -- LIMIT ${parseInt(maxAnchors, 10)}`
 
   const statement = `
     WITH numbered AS (
@@ -631,8 +631,8 @@ export function coTravelerCheckinsQuery({
 
   const anchorFilter =
     idxList && idxList.length
-      ? `WHERE idx IN (${idxList.map((n) => parseInt(n, 10)).filter(Number.isFinite).join(',')})`
-      : `ORDER BY idx LIMIT ${parseInt(maxAnchors, 10)}`
+      ? `-- WHERE idx IN (${idxList.map((n) => parseInt(n, 10)).filter(Number.isFinite).join(',')})`
+      : `ORDER BY idx -- LIMIT ${parseInt(maxAnchors, 10)}`
 
   const statement = `
     WITH anchor_numbered AS (

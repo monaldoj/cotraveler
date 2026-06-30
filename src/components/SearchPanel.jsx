@@ -252,7 +252,7 @@ export default function SearchPanel({
         <label>
           Time window — ± {windowHours} h
           <input
-            type="range" min="1" max="168" step="1"
+            type="range" min="1" max="24" step="1"
             value={windowHours}
             onChange={(e) => setWindowHours(Number(e.target.value))}
           />

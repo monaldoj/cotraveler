@@ -28,7 +28,7 @@ export default function App() {
 
   // Search parameters (shared by the user search and co-traveler search).
   const [radiusKm, setRadiusKm] = useState(1.0)
-  const [windowHours, setWindowHours] = useState(24)
+  const [windowHours, setWindowHours] = useState(1)
 
   // User-of-interest: the committed user_id, their check-ins, and which
   // check-ins (by idx) are selected as search anchors. `selected = null`
