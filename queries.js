@@ -170,7 +170,8 @@ export function userCheckpointQuery({ userId, atTime = null }) {
 // kRing of H3 cells around it (coarse spatial prune that rides the
 // h3_r9 clustering key), join the full table on those cells, keep
 // only rows inside the time window, then refine to an exact radius
-// with the haversine great-circle distance.
+// with ST_DistanceSpheroid — Databricks' native geodesic great-circle
+// distance (meters on the WGS84 ellipsoid), divided to km.
 //
 // We deliberately do NOT call h3_distance across the whole table:
 // it throws H3_UNDEFINED_GRID_DISTANCE for far-apart cells. The
@@ -190,7 +191,7 @@ export function proximitySearchQuery({
 }) {
   // Convert the requested radius into a kRing size, padded by one
   // ring so the cheap hex prune never clips points the exact
-  // haversine filter would keep.
+  // distance filter would keep.
   const k = Math.max(1, Math.ceil(radiusKm / H3_R9_EDGE_KM) + 1)
 
   // Anchor selection mirrors userCheckpointQuery so "search" and the
@@ -228,11 +229,10 @@ export function proximitySearchQuery({
         c.longitude,
         c.local_time,
         h3_h3tostring(c.h3_r9) AS h3,
-        2 * 6371 * ASIN(SQRT(
-          POWER(SIN(RADIANS(c.latitude - r.a_lat) / 2), 2) +
-          COS(RADIANS(r.a_lat)) * COS(RADIANS(c.latitude)) *
-          POWER(SIN(RADIANS(c.longitude - r.a_lon) / 2), 2)
-        )) AS dist_km,
+        ST_DistanceSpheroid(
+          ST_Point(c.longitude, c.latitude, 4326),
+          ST_Point(r.a_lon, r.a_lat, 4326)
+        ) / 1000.0 AS dist_km,
         ABS(TIMESTAMPDIFF(MINUTE, c.local_time, r.a_time)) AS minutes_apart
       FROM ring r
       JOIN ${CHECKINS_TABLE} c
@@ -399,7 +399,7 @@ export function userCheckinsQuery({ userId, limit = 500 }) {
       h3_h3tostring(h3_r9) AS h3
     FROM ${CHECKINS_TABLE}
     WHERE user_id = :userId
-    QUALIFY idx <= :limit
+    -- QUALIFY idx <= :limit
     ORDER BY idx
   `
   return {
@@ -448,7 +448,7 @@ export function coTravelersAggQuery({
   const anchorFilter =
     idxList && idxList.length
       ? `WHERE idx IN (${idxList.map((n) => parseInt(n, 10)).filter(Number.isFinite).join(',')})`
-      : `ORDER BY idx LIMIT ${parseInt(maxAnchors, 10)}`
+      : `ORDER BY idx -- LIMIT ${parseInt(maxAnchors, 10)}`
 
   const statement = `
     WITH numbered AS (
@@ -476,11 +476,10 @@ export function coTravelersAggQuery({
       SELECT
         c.user_id,
         a.anchor_idx,
-        2 * 6371 * ASIN(SQRT(
-          POWER(SIN(RADIANS(c.latitude - a.a_lat) / 2), 2) +
-          COS(RADIANS(a.a_lat)) * COS(RADIANS(c.latitude)) *
-          POWER(SIN(RADIANS(c.longitude - a.a_lon) / 2), 2)
-        )) AS dist_km,
+        ST_DistanceSpheroid(
+          ST_Point(c.longitude, c.latitude, 4326),
+          ST_Point(a.a_lon, a.a_lat, 4326)
+        ) / 1000.0 AS dist_km,
         ABS(TIMESTAMPDIFF(MINUTE, c.local_time, a.a_time)) AS minutes_apart
       FROM ring a
       JOIN ${CHECKINS_TABLE} c
@@ -499,7 +498,7 @@ export function coTravelersAggQuery({
     WHERE dist_km <= :radiusKm
     GROUP BY user_id
     ORDER BY hits DESC, stops DESC, nearest_km
-    LIMIT :limit
+    -- LIMIT :limit
   `
 
   return {
@@ -564,11 +563,10 @@ export function coTravelerOverlapQuery({
     candidates AS (
       SELECT
         a.anchor_idx,
-        2 * 6371 * ASIN(SQRT(
-          POWER(SIN(RADIANS(c.latitude - a.a_lat) / 2), 2) +
-          COS(RADIANS(a.a_lat)) * COS(RADIANS(c.latitude)) *
-          POWER(SIN(RADIANS(c.longitude - a.a_lon) / 2), 2)
-        )) AS dist_km,
+        ST_DistanceSpheroid(
+          ST_Point(c.longitude, c.latitude, 4326),
+          ST_Point(a.a_lon, a.a_lat, 4326)
+        ) / 1000.0 AS dist_km,
         ABS(TIMESTAMPDIFF(MINUTE, c.local_time, a.a_time)) AS minutes_apart
       FROM ring a
       JOIN ${CHECKINS_TABLE} c
@@ -673,11 +671,10 @@ export function coTravelerCheckinsQuery({
       JOIN ct ON ct.h3_r9 = a.cell
       WHERE ct.local_time BETWEEN a.a_time - MAKE_INTERVAL(0,0,0,0,:win,0,0)
                               AND a.a_time + MAKE_INTERVAL(0,0,0,0,:win,0,0)
-        AND 2 * 6371 * ASIN(SQRT(
-              POWER(SIN(RADIANS(ct.latitude - a.a_lat) / 2), 2) +
-              COS(RADIANS(a.a_lat)) * COS(RADIANS(ct.latitude)) *
-              POWER(SIN(RADIANS(ct.longitude - a.a_lon) / 2), 2)
-            )) <= :radiusKm
+        AND ST_DistanceSpheroid(
+              ST_Point(ct.longitude, ct.latitude, 4326),
+              ST_Point(a.a_lon, a.a_lat, 4326)
+            ) / 1000.0 <= :radiusKm
       GROUP BY ct.idx
     )
     SELECT

@@ -48,6 +48,9 @@ body {
   padding: 12px 20px;
   border-top: 1px solid var(--border);
   background: var(--panel);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
 }
 
 .hexbin-toggle {
@@ -351,6 +354,91 @@ h2 .badge {
 }
 
 .status .conn { color: var(--muted); }
+
+/* Live SQL query overlay — sits just above the status box, bottom-left.
+   The status box is ~36px tall; we offset above it. */
+.query-overlay {
+  position: absolute;
+  bottom: 56px;
+  left: 12px;
+  z-index: 1000;
+  max-width: min(620px, calc(100% - 24px));
+  max-height: 45vh;
+  overflow: auto;
+  padding: 8px 12px;
+  background: rgba(22, 27, 34, 0.95);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.query-overlay .query-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 6px;
+}
+
+.query-overlay .query-endpoint {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--accent);
+  font-variant-numeric: tabular-nums;
+}
+
+.query-overlay .query-time {
+  margin-left: auto;
+  font-size: 12px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Prev/next controls to arrow through the query history. */
+.query-overlay .query-nav {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.query-overlay .query-nav button {
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+}
+.query-overlay .query-nav button:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+.query-overlay .query-nav button:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.query-overlay .query-pos {
+  font-size: 11px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  min-width: 32px;
+  text-align: center;
+}
+
+.query-overlay .query-sql {
+  margin: 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--text);
+  white-space: pre;
+  overflow-x: auto;
+}
 
 /* Leaflet popups on the dark theme. */
 .leaflet-popup-content-wrapper,

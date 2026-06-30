@@ -174,7 +174,7 @@ export default function SearchPanel({
   userOfInterest, checkins, loadingCheckins, selected, matches, searching, error,
   onSearchUser, onClearUser, onToggleCheckin, onSelectAll, onSelectNone,
   onFindCoTravelers, fetchOverlap, onToggleMatch, activeMatch,
-  showHexbins, onToggleHexbins,
+  showHexbins, onToggleHexbins, showQueries, onToggleQueries,
 }) {
   const [userId, setUserId] = useState('')
   const [suggestions, setSuggestions] = useState([])
@@ -333,6 +333,14 @@ export default function SearchPanel({
       {/* Pinned footer — toggle the full-population H3 hexbin layer so
           the map stays uncluttered while investigating a user. */}
       <div className="sidebar-footer">
+        <label className="hexbin-toggle">
+          <input
+            type="checkbox"
+            checked={showQueries}
+            onChange={onToggleQueries}
+          />
+          <span>Show geospatial queries</span>
+        </label>
         <label className="hexbin-toggle">
           <input
             type="checkbox"

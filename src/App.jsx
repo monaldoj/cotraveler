@@ -63,6 +63,19 @@ export default function App() {
   const [showHexbins, setShowHexbins] = useState(true)
   const showHexbinsRef = useRef(true)
 
+  // Optional "show me the SQL" overlay. When on, we subscribe to the api
+  // query observer and keep a rolling history of executed queries (their
+  // text + run time), shown just above the hexbin-count status box. `idx`
+  // is the cursor the user arrows through; -1 means "nothing yet". When a
+  // new query lands while the cursor is parked on the newest entry we
+  // follow it, but if the user has arrowed back into history we leave
+  // their position alone.
+  const [showQueries, setShowQueries] = useState(false)
+  const [queryLog, setQueryLog] = useState({ history: [], idx: -1 })
+  // { endpoint, sql, elapsedMs } per entry. Cap so a long session doesn't
+  // grow this without bound.
+  const QUERY_HISTORY_MAX = 50
+
   // Track the latest viewport request so out-of-order responses from
   // rapid panning don't clobber the current view.
   const reqSeq = useRef(0)
@@ -71,6 +84,37 @@ export default function App() {
   useEffect(() => {
     api.config().then(setConfig).catch(() => {})
   }, [])
+
+  // While the query overlay is on, append every executed SQL query to the
+  // history. Subscribing only when on keeps a no-op tap out of the hot
+  // path; we clear the history when toggled back off.
+  useEffect(() => {
+    if (!showQueries) { setQueryLog({ history: [], idx: -1 }); return }
+    return api.onQuery((q) => {
+      setQueryLog((cur) => {
+        // Drop the oldest once we hit the cap.
+        const history = [...cur.history, q].slice(-QUERY_HISTORY_MAX)
+        // Follow the newest entry only if the cursor was already there
+        // (or unset); otherwise hold the user's place, shifting the index
+        // if an eviction slid everything down by one.
+        const wasAtNewest = cur.idx === cur.history.length - 1 || cur.idx === -1
+        const evicted = cur.history.length === QUERY_HISTORY_MAX
+        const idx = wasAtNewest
+          ? history.length - 1
+          : Math.max(0, cur.idx - (evicted ? 1 : 0))
+        return { history, idx }
+      })
+    })
+  }, [showQueries])
+
+  // Arrow through the query history. Clamped to the available range.
+  function stepQuery(delta) {
+    setQueryLog((cur) => {
+      if (!cur.history.length) return cur
+      const idx = Math.min(cur.history.length - 1, Math.max(0, cur.idx + delta))
+      return { ...cur, idx }
+    })
+  }
 
   // Fetch + apply the H3 bins for a viewport, guarded against
   // out-of-order responses. No-op (and clears the layer) when hexbins
@@ -260,6 +304,8 @@ export default function App() {
         activeMatch={activeMatch}
         showHexbins={showHexbins}
         onToggleHexbins={onToggleHexbins}
+        showQueries={showQueries}
+        onToggleQueries={() => setShowQueries((on) => !on)}
       />
       <main className="map-wrap">
         <Map
@@ -271,6 +317,45 @@ export default function App() {
           coTravelerCheckins={coTravelerCheckins}
           coTravelerId={activeMatch}
         />
+        {showQueries && (
+          <div className="query-overlay">
+            {queryLog.history.length ? (
+              (() => {
+                const cur = queryLog.history[queryLog.idx]
+                const atOldest = queryLog.idx <= 0
+                const atNewest = queryLog.idx >= queryLog.history.length - 1
+                return (
+                  <>
+                    <div className="query-head">
+                      <span className="query-endpoint">{cur.endpoint}</span>
+                      {cur.elapsedMs != null && (
+                        <span className="query-time">{cur.elapsedMs.toLocaleString()} ms</span>
+                      )}
+                      <span className="query-nav">
+                        <button
+                          type="button"
+                          onClick={() => stepQuery(-1)}
+                          disabled={atOldest}
+                          aria-label="Previous query"
+                        >←</button>
+                        <span className="query-pos">{queryLog.idx + 1}/{queryLog.history.length}</span>
+                        <button
+                          type="button"
+                          onClick={() => stepQuery(1)}
+                          disabled={atNewest}
+                          aria-label="Next query"
+                        >→</button>
+                      </span>
+                    </div>
+                    <pre className="query-sql">{cur.sql}</pre>
+                  </>
+                )
+              })()
+            ) : (
+              <span className="muted">Waiting for a geospatial query…</span>
+            )}
+          </div>
+        )}
         <div className="status">
           {!showHexbins
             ? 'Hexbins hidden'

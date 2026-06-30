@@ -121,6 +121,37 @@ async function executeSql({ statement, parameters = [] }, token) {
   return rows
 }
 
+// Render a { statement, parameters } pair into a single display-friendly
+// SQL string: the named markers (:name) are substituted with their bound
+// values and the indentation is trimmed. This is for the UI overlay only
+// — the warehouse still runs the safe, parameterized statement. Strings
+// are quoted; numbers ride bare. Longer names are replaced first so :win
+// doesn't clobber the front of :windowHours, etc.
+function renderSql({ statement, parameters = [] }) {
+  let sql = statement
+  for (const p of [...parameters].sort((a, b) => b.name.length - a.name.length)) {
+    const isNumeric = ['INT', 'DOUBLE', 'BIGINT', 'FLOAT', 'DECIMAL'].includes(p.type)
+    const literal = isNumeric ? p.value : `'${String(p.value).replace(/'/g, "''")}'`
+    sql = sql.replaceAll(`:${p.name}`, literal)
+  }
+  // Collapse the leading indentation the template literals carry.
+  const lines = sql.replace(/^\n/, '').replace(/\s+$/, '').split('\n')
+  const indent = Math.min(
+    ...lines.filter((l) => l.trim()).map((l) => l.match(/^\s*/)[0].length),
+  )
+  return lines.map((l) => l.slice(indent)).join('\n')
+}
+
+// Wrap executeSql to also surface the SQL text + the time the warehouse
+// took to run it. Endpoints return these alongside their results so the
+// UI can optionally show each geospatial query (and its run time) as it
+// fires. `sql`/`elapsedMs` are otherwise inert metadata.
+async function runSql(query, token) {
+  const started = Date.now()
+  const rows = await executeSql(query, token)
+  return { rows, sql: renderSql(query), elapsedMs: Date.now() - started }
+}
+
 app.use(express.json())
 // Serve the built React app from dist/ (same as Repo A).
 app.use(express.static(path.join(__dirname, 'dist')))
@@ -155,7 +186,7 @@ app.post('/api/h3-bins', async (req, res) => {
     // browser smooth. The query still reports full-viewport totals.
     const cap = Math.min(Number(maxCells) || 5000, 5000)
     const q = viewportBinsQuery({ north, south, east, west, zoom, maxCells: cap })
-    const rows = await executeSql(q, token)
+    const { rows, sql, elapsedMs } = await runSql(q, token)
     // Parse each hexagon's GeoJSON boundary once, server-side.
     const bins = rows.map((r) => ({
       h3: r.h3,
@@ -166,7 +197,7 @@ app.post('/api/h3-bins', async (req, res) => {
     // them off the first row. Empty viewport => zeros.
     const totalCells = rows.length ? Number(rows[0].total_cells) : 0
     const totalRecords = rows.length ? Number(rows[0].total_records) : 0
-    res.json({ bins, zoom, totalCells, totalRecords, capped: totalCells > bins.length })
+    res.json({ bins, zoom, totalCells, totalRecords, capped: totalCells > bins.length, sql, elapsedMs })
   } catch (err) {
     console.error('h3-bins error:', err.message)
     res.status(500).json({ error: err.message })
@@ -183,13 +214,13 @@ app.post('/api/hex-categories', async (req, res) => {
   if (!token) return res.status(503).json({ error: 'no Databricks credentials' })
 
   try {
-    const rows = await executeSql(hexCategoriesQuery({ h3, zoom }), token)
+    const { rows, sql, elapsedMs } = await runSql(hexCategoriesQuery({ h3, zoom }), token)
     const categories = rows.map((r) => ({
       category: r.category || 'Uncategorized',
       count: Number(r.cnt),
     }))
     const total = categories.reduce((sum, c) => sum + c.count, 0)
-    res.json({ h3, categories, total })
+    res.json({ h3, categories, total, sql, elapsedMs })
   } catch (err) {
     console.error('hex-categories error:', err.message)
     res.status(500).json({ error: err.message })
@@ -204,8 +235,8 @@ app.get('/api/users', async (req, res) => {
   if (!token) return res.status(503).json({ error: 'no Databricks credentials' })
 
   try {
-    const rows = await executeSql(userSuggestQuery({ prefix }), token)
-    res.json({ users: rows.map((r) => ({ userId: r.user_id, checkins: Number(r.checkins) })) })
+    const { rows, sql, elapsedMs } = await runSql(userSuggestQuery({ prefix }), token)
+    res.json({ users: rows.map((r) => ({ userId: r.user_id, checkins: Number(r.checkins) })), sql, elapsedMs })
   } catch (err) {
     console.error('users error:', err.message)
     res.status(500).json({ error: err.message })
@@ -222,11 +253,11 @@ app.post('/api/top-users', async (req, res) => {
   if (!token) return res.status(503).json({ error: 'no Databricks credentials' })
 
   try {
-    const rows = await executeSql(
+    const { rows, sql, elapsedMs } = await runSql(
       topUsersQuery({ north, south, east, west, limit: Math.min(Number(limit) || 100, 500) }),
       token,
     )
-    res.json({ users: rows.map((r) => ({ userId: r.user_id, checkins: Number(r.checkins) })) })
+    res.json({ users: rows.map((r) => ({ userId: r.user_id, checkins: Number(r.checkins) })), sql, elapsedMs })
   } catch (err) {
     console.error('top-users error:', err.message)
     res.status(500).json({ error: err.message })
@@ -243,7 +274,7 @@ app.get('/api/user-checkins', async (req, res) => {
   if (!token) return res.status(503).json({ error: 'no Databricks credentials' })
 
   try {
-    const rows = await executeSql(userCheckinsQuery({ userId, limit }), token)
+    const { rows, sql, elapsedMs } = await runSql(userCheckinsQuery({ userId, limit }), token)
     res.json({
       userId,
       checkins: rows.map((r) => ({
@@ -255,6 +286,7 @@ app.get('/api/user-checkins', async (req, res) => {
         lon: Number(r.longitude),
         h3: r.h3,
       })),
+      sql, elapsedMs,
     })
   } catch (err) {
     console.error('user-checkins error:', err.message)
@@ -277,7 +309,7 @@ app.post('/api/co-travelers', async (req, res) => {
     : null
 
   try {
-    const rows = await executeSql(
+    const { rows, sql, elapsedMs } = await runSql(
       coTravelersAggQuery({ userId, radiusKm, windowHours, idxList: ids, limit }),
       token,
     )
@@ -291,6 +323,7 @@ app.post('/api/co-travelers', async (req, res) => {
         nearestKm: Number(m.nearest_km),
         closestMin: Number(m.closest_min),
       })),
+      sql, elapsedMs,
     })
   } catch (err) {
     console.error('co-travelers error:', err.message)
@@ -313,7 +346,7 @@ app.post('/api/co-traveler-overlap', async (req, res) => {
     : null
 
   try {
-    const rows = await executeSql(
+    const { rows, sql, elapsedMs } = await runSql(
       coTravelerOverlapQuery({ userId, matchUserId, radiusKm, windowHours, idxList: ids }),
       token,
     )
@@ -326,6 +359,7 @@ app.post('/api/co-traveler-overlap', async (req, res) => {
         closestMin: Number(r.closest_min),
         encounters: Number(r.encounters),
       })),
+      sql, elapsedMs,
     })
   } catch (err) {
     console.error('co-traveler-overlap error:', err.message)
@@ -349,7 +383,7 @@ app.post('/api/co-traveler-checkins', async (req, res) => {
     : null
 
   try {
-    const rows = await executeSql(
+    const { rows, sql, elapsedMs } = await runSql(
       coTravelerCheckinsQuery({ userId, matchUserId, radiusKm, windowHours, idxList: ids }),
       token,
     )
@@ -365,6 +399,7 @@ app.post('/api/co-traveler-checkins', async (req, res) => {
         h3: r.h3,
         isHit: r.is_hit === true || r.is_hit === 'true',
       })),
+      sql, elapsedMs,
     })
   } catch (err) {
     console.error('co-traveler-checkins error:', err.message)
